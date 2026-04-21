@@ -34,23 +34,26 @@ Construire une V1 locale permettant :
 
 Le dossier `docs/` contient les documents de cadrage et de préparation technique du projet :
 
-- `architecture_technique_v1_...`
-  Architecture technique générale de la V1 : stack, structure des pages, stockage local, backlog.
+- `perimetre-v1-final.md`  
+  Définit ce qui entre réellement dans la V1, ce qui passe en V1.1, et ce qui reste hors périmètre.
 
-- `perimetre_v1_final_...`
-  Définition de ce qui entre réellement dans la V1, ce qui passe en V1.1, et ce qui reste hors périmètre.
+- `architecture-technique-v1.md`  
+  Présente l’architecture technique générale de la V1 : stack, structure des pages, stockage local et backlog.
 
-- `schema_de_donnees_definitif_...`
-  Modèle de données de référence : entités métier, relations, règles de cohérence.
+- `nettoyage-final-cdc-architecture.md`  
+  Vérifie et harmonise les documents principaux du projet pour assurer leur cohérence avant le développement.
 
-- `schema_dexie_detaille_...`
-  Structure Dexie détaillée, organisation TypeScript, repositories, services métier et découpage technique.
+- `plan-de-developpement-v1.md`  
+  Donne le plan de développement concret : MVP technique, ordre des développements, milestones et priorités.
 
-- `squelette_initial_...`
-  Base de départ recommandée pour le projet : arborescence, premiers fichiers, structure minimale.
+- `schema-dexie-typescript.md`  
+  Décrit la structure Dexie détaillée, l’organisation TypeScript, les repositories, les services métier et le découpage technique.
 
-- `plan_de_developpement_concret_...`
-  Plan de développement concret : MVP technique, ordre des développements, milestones et priorités.
+- `schema-donnees-v1.md`  
+  Définit le modèle de données de référence : entités métier, relations et règles de cohérence.
+
+- `squelette-initial.md`  
+  Propose la base de départ du projet : arborescence, premiers fichiers et structure minimale recommandée.
 
 ## Statut
 
