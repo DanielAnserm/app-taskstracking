@@ -34,22 +34,22 @@ Construire une V1 locale permettant :
 
 Le dossier `docs/` contient les documents de cadrage et de préparation technique du projet :
 
-- `architecture-technique-v1.md`  
+- `architecture_technique_v1_...`
   Architecture technique générale de la V1 : stack, structure des pages, stockage local, backlog.
 
-- `perimetre-v1-final.md`  
+- `perimetre_v1_final_...`
   Définition de ce qui entre réellement dans la V1, ce qui passe en V1.1, et ce qui reste hors périmètre.
 
-- `schema-donnees-v1.md`  
+- `schema_de_donnees_definitif_...`
   Modèle de données de référence : entités métier, relations, règles de cohérence.
 
-- `schema-dexie-typescript.md`  
+- `schema_dexie_detaille_...`
   Structure Dexie détaillée, organisation TypeScript, repositories, services métier et découpage technique.
 
-- `squelette-initial.md`  
+- `squelette_initial_...`
   Base de départ recommandée pour le projet : arborescence, premiers fichiers, structure minimale.
 
-- `plan-de-developpement-v1.md`  
+- `plan_de_developpement_concret_...`
   Plan de développement concret : MVP technique, ordre des développements, milestones et priorités.
 
 ## Statut
