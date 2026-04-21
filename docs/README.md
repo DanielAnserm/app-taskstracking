@@ -1,8 +1,11 @@
 # Documentation projet
 
-Ce dossier regroupe les documents de cadrage et de conception du projet :
-- CDC
-- architecture technique
-- périmètre V1
-- schéma de données
-- plan de développement
+Ce dossier contient les documents de cadrage du projet.
+
+## Documents
+- `architecture-technique-v1.md`
+- `perimetre-v1-final.md`
+- `schema-donnees-v1.md`
+
+## But
+Conserver une base claire avant le démarrage du développement.
