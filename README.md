@@ -1,73 +1,60 @@
-# React + TypeScript + Vite
+# Outil de suivi du temps de travail
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Application web locale de suivi du temps de travail.
 
-Currently, two official plugins are available:
+## Objectif
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Construire une V1 locale permettant :
 
-## React Compiler
+- une tâche active
+- un suivi du jour
+- un suivi hebdomadaire
+- un suivi mensuel
+- une vue d’ensemble allégée
+- un historique simple
+- un stockage local robuste
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Stack prévue
 
-## Expanding the ESLint configuration
+- React
+- TypeScript
+- Vite
+- Tailwind CSS
+- Dexie / IndexedDB
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Principes de la V1
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- fonctionnement local, sans hébergement obligatoire
+- une seule tâche active à la fois
+- pauses stockées comme vraies entrées de temps
+- ajout et modification manuelle possibles
+- priorité à une base simple, robuste et utilisable au quotidien
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## Documentation
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Le dossier `docs/` contient les documents de cadrage et de préparation technique du projet :
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+- `perimetre-v1-final.md`  
+  Définit ce qui entre réellement dans la V1, ce qui passe en V1.1, et ce qui reste hors périmètre.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- `architecture-technique-v1.md`  
+  Présente l’architecture technique générale de la V1 : stack, structure des pages, stockage local et backlog.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+- `nettoyage-final-cdc-architecture.md`  
+  Vérifie et harmonise les documents principaux du projet pour assurer leur cohérence avant le développement.
+
+- `plan-de-developpement-v1.md`  
+  Donne le plan de développement concret : MVP technique, ordre des développements, milestones et priorités.
+
+- `schema-dexie-typescript.md`  
+  Décrit la structure Dexie détaillée, l’organisation TypeScript, les repositories, les services métier et le découpage technique.
+
+- `schema-donnees-v1.md`  
+  Définit le modèle de données de référence : entités métier, relations et règles de cohérence.
+
+- `squelette-initial.md`  
+  Propose la base de départ du projet : arborescence, premiers fichiers et structure minimale recommandée.
+
+## Statut
+
+Le projet est actuellement en phase de cadrage et de préparation technique, avant le démarrage du code de la V1.
