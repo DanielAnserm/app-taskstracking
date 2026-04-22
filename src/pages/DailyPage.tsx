@@ -4,7 +4,7 @@ import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
 import { timeEntryRepository } from "../repositories/timeEntryRepository";
-import type { TimeEntry, WorkSector } from "../types/domain";
+import type { Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 
 function todayDateString(): string {
@@ -30,8 +30,16 @@ function isoToTimeInput(iso: string): string {
   return `${hours}:${minutes}`;
 }
 
+function parseTagInput(input: string): string[] {
+  return input
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
+  tags?: Tag[];
 }
 
 type SortOrder = "asc" | "desc";
@@ -39,6 +47,7 @@ type SortOrder = "asc" | "desc";
 export function DailyPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
   const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [pauseSeconds, setPauseSeconds] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -48,6 +57,8 @@ export function DailyPage() {
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [note, setNote] = useState("");
+  const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
+  const [newTagInput, setNewTagInput] = useState("");
   const [isPause, setIsPause] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
@@ -59,23 +70,34 @@ export function DailyPage() {
     const totals = await aggregationService.getDailyTotals(date);
 
     const allSectors = await db.workSectors.toArray();
+    const allTags = await db.tags.toArray();
 
     const usableSectors = allSectors
       .filter((sector) => sector.isActive && !sector.isArchived && sector.id !== "pause")
       .sort((a, b) => a.displayOrder - b.displayOrder);
 
+    const usableTags = allTags
+      .filter((tag) => tag.isActive && !tag.isArchived)
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+
     const enrichedEntries = await Promise.all(
       rawEntries.map(async (entry) => {
         const sector = await db.workSectors.get(entry.sectorId);
+        const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
+        const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
+        const tags = tagResults.filter(Boolean) as Tag[];
+
         return {
           ...entry,
           sector,
+          tags,
         };
       }),
     );
 
     setEntries(enrichedEntries);
     setAvailableSectors(usableSectors);
+    setAvailableTags(usableTags);
     setActiveSeconds(totals.activeSeconds);
     setPauseSeconds(totals.pauseSeconds);
 
@@ -106,6 +128,8 @@ export function DailyPage() {
     setStartTime("09:00");
     setEndTime("10:00");
     setNote("");
+    setSelectedTagNames([]);
+    setNewTagInput("");
     setIsPause(false);
     setErrorMessage("");
 
@@ -123,6 +147,8 @@ export function DailyPage() {
     setStartTime(isoToTimeInput(entry.startAt));
     setEndTime(isoToTimeInput(entry.endAt));
     setNote(entry.notes ?? "");
+    setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
+    setNewTagInput("");
     setErrorMessage("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -147,6 +173,7 @@ export function DailyPage() {
     setErrorMessage("");
 
     const effectiveSectorId = isPause ? "pause" : selectedSectorId;
+    const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
 
     if (!effectiveSectorId) {
       setErrorMessage("Choisis un secteur.");
@@ -186,7 +213,7 @@ export function DailyPage() {
           updatedAt: nowIso,
         };
 
-        await entryService.updateEntry(updatedEntry);
+        await entryService.updateEntry(updatedEntry, tagNames);
       } else {
         const newEntry: TimeEntry = {
           id: crypto.randomUUID(),
@@ -204,7 +231,7 @@ export function DailyPage() {
           updatedAt: nowIso,
         };
 
-        await entryService.createManualEntry(newEntry);
+        await entryService.createManualEntry(newEntry, tagNames);
       }
 
       resetForm();
@@ -310,6 +337,52 @@ export function DailyPage() {
                 onChange={(e) => setEndTime(e.target.value)}
                 className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
               />
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="mb-2 block text-sm font-medium text-neutral-700">
+                Tags
+              </label>
+
+              {availableTags.length > 0 ? (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  {availableTags.map((tag) => {
+                    const isSelected = selectedTagNames.includes(tag.name);
+
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedTagNames((prev) =>
+                            prev.includes(tag.name)
+                              ? prev.filter((name) => name !== tag.name)
+                              : [...prev, tag.name],
+                          )
+                        }
+                        className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                          isSelected
+                            ? "bg-neutral-900 text-white"
+                            : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                        }`}
+                      >
+                        {tag.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              <input
+                type="text"
+                value={newTagInput}
+                onChange={(e) => setNewTagInput(e.target.value)}
+                placeholder="Ajouter de nouveaux tags, séparés par des virgules"
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+              />
+              <p className="mt-2 text-xs text-neutral-500">
+                Tu peux sélectionner des tags existants ci-dessus ou en créer de nouveaux ici.
+              </p>
             </div>
           </div>
 
@@ -427,6 +500,19 @@ export function DailyPage() {
 
                         {entry.notes ? (
                           <p className="mt-3 text-sm text-neutral-700">{entry.notes}</p>
+                        ) : null}
+
+                        {entry.tags && entry.tags.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {entry.tags.map((tag) => (
+                              <span
+                                key={tag.id}
+                                className="rounded-full bg-neutral-200 px-3 py-1 text-xs font-medium text-neutral-700"
+                              >
+                                {tag.name}
+                              </span>
+                            ))}
+                          </div>
                         ) : null}
                       </div>
 

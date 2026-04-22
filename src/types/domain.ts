@@ -80,6 +80,7 @@ export interface ActiveSession {
   segmentStartedAt: string;
   energy?: EnergyLevel;
   notesDraft?: string;
+  tagNamesDraft?: string[];
   createdAt: string;
   updatedAt: string;
 }

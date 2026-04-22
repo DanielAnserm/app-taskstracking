@@ -1,4 +1,4 @@
-import { timeEntryRepository } from "../../repositories/timeEntryRepository";
+import { entryService } from "./entryService";
 import { sessionRepository } from "../../repositories/sessionRepository";
 import type { ActiveSession, SessionStatus, TimeEntry } from "../../types/domain";
 
@@ -73,18 +73,18 @@ export const sessionService = {
       const workedSeconds = diffSeconds(segmentStart, nowIso);
 
       if (workedSeconds > 0) {
-        await timeEntryRepository.create(
-          buildEntry({
-            sectorId: session.sectorId,
-            startAt: segmentStart,
-            endAt: nowIso,
-            isPause: false,
-            notes: session.notesDraft,
-            energy: session.energy,
-          }),
-        );
-      }
-
+  await entryService.createEntry(
+    buildEntry({
+      sectorId: session.sectorId,
+      startAt: segmentStart,
+      endAt: nowIso,
+      isPause: false,
+      notes: session.notesDraft,
+      energy: session.energy,
+    }),
+    session.tagNamesDraft ?? [],
+  );
+}
       await sessionRepository.save({
         ...session,
         status: "paused",
@@ -108,15 +108,16 @@ export const sessionService = {
       const pauseSeconds = diffSeconds(session.pausedAt, nowIso);
 
       if (pauseSeconds > 0) {
-        await timeEntryRepository.create(
-          buildEntry({
-            sectorId: "pause",
-            startAt: session.pausedAt,
-            endAt: nowIso,
-            isPause: true,
-          }),
-        );
-      }
+  await entryService.createEntry(
+    buildEntry({
+      sectorId: "pause",
+      startAt: session.pausedAt,
+      endAt: nowIso,
+      isPause: true,
+    }),
+    [],
+  );
+}
 
       await sessionRepository.save({
         ...session,
@@ -156,17 +157,18 @@ export const sessionService = {
       const isPauseSession = session.sectorId === "pause";
 
       if (segmentSeconds > 0) {
-        await timeEntryRepository.create(
-          buildEntry({
-            sectorId: isPauseSession ? "pause" : session.sectorId,
-            startAt: segmentStart,
-            endAt: nowIso,
-            isPause: isPauseSession,
-            notes: session.notesDraft,
-            energy: isPauseSession ? undefined : session.energy,
-          }),
-        );
-      }
+  await entryService.createEntry(
+    buildEntry({
+      sectorId: isPauseSession ? "pause" : session.sectorId,
+      startAt: segmentStart,
+      endAt: nowIso,
+      isPause: isPauseSession,
+      notes: session.notesDraft,
+      energy: isPauseSession ? undefined : session.energy,
+    }),
+    isPauseSession ? [] : session.tagNamesDraft ?? [],
+  );
+}
     }
 
     await sessionRepository.remove(session.id);

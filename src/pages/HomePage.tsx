@@ -3,13 +3,18 @@ import { Link } from "react-router-dom";
 import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { sessionService } from "../domain/timeTracking/sessionService";
 import { db } from "../db/database";
-import type { ActiveSession, WorkSector } from "../types/domain";
+import type { ActiveSession, Tag, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds, formatTimer } from "../utils/duration";
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10);
 }
-
+function parseTagInput(input: string): string[] {
+  return input
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
 function computeElapsedSeconds(session: ActiveSession, nowMs: number): number {
   const base = session.accumulatedActiveSeconds ?? 0;
 
@@ -28,9 +33,12 @@ function computeElapsedSeconds(session: ActiveSession, nowMs: number): number {
 export function HomePage() {
   const [currentSession, setCurrentSession] = useState<ActiveSession | undefined>(undefined);
   const [currentSector, setCurrentSector] = useState<WorkSector | undefined>(undefined);
-  const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
-  const [selectedSectorId, setSelectedSectorId] = useState("");
-  const [draftNote, setDraftNote] = useState("");
+const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+const [selectedSectorId, setSelectedSectorId] = useState("");
+const [draftNote, setDraftNote] = useState("");
+const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
+const [newTagInput, setNewTagInput] = useState("");
 
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [pauseSeconds, setPauseSeconds] = useState(0);
@@ -43,9 +51,13 @@ export function HomePage() {
     const totals = await aggregationService.getDailyTotals(todayDateString());
 
     const allSectors = await db.workSectors.toArray();
+    const allTags = await db.tags.toArray();
     const usableSectors = allSectors
       .filter((sector) => sector.isActive && !sector.isArchived && sector.id !== "pause")
       .sort((a, b) => a.displayOrder - b.displayOrder);
+      const usableTags = allTags
+  .filter((tag) => tag.isActive && !tag.isArchived)
+  .sort((a, b) => a.name.localeCompare(b.name, "fr"));
 
     let sector: WorkSector | undefined;
     if (session) {
@@ -55,6 +67,7 @@ export function HomePage() {
     setCurrentSession(session);
     setCurrentSector(sector);
     setAvailableSectors(usableSectors);
+    setAvailableTags(usableTags);
     setActiveSeconds(totals.activeSeconds);
     setPauseSeconds(totals.pauseSeconds);
 
@@ -124,24 +137,29 @@ export function HomePage() {
     try {
       const now = new Date().toISOString();
 
-      const newSession: ActiveSession = {
-        id: crypto.randomUUID(),
-        sectorId: selectedSectorId,
-        subTaskId: undefined,
-        startedAt: now,
-        status: "running",
-        pausedAt: undefined,
-        accumulatedPauseSeconds: 0,
-        accumulatedActiveSeconds: 0,
-        segmentStartedAt: now,
-        energy: "bon",
-        notesDraft: draftNote.trim() || undefined,
-        createdAt: now,
-        updatedAt: now,
-      };
+const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
+
+const newSession: ActiveSession = {
+  id: crypto.randomUUID(),
+  sectorId: selectedSectorId,
+  subTaskId: undefined,
+  startedAt: now,
+  status: "running",
+  pausedAt: undefined,
+  accumulatedPauseSeconds: 0,
+  accumulatedActiveSeconds: 0,
+  segmentStartedAt: now,
+  energy: "bon",
+  notesDraft: draftNote.trim() || undefined,
+  tagNamesDraft: tagNames,
+  createdAt: now,
+  updatedAt: now,
+};
 
       await sessionService.start(newSession);
       setDraftNote("");
+setSelectedTagNames([]);
+setNewTagInput("");
       await loadData();
     } finally {
       setActionLoading(false);
@@ -154,23 +172,26 @@ export function HomePage() {
       const now = new Date().toISOString();
 
       const pauseSession: ActiveSession = {
-        id: crypto.randomUUID(),
-        sectorId: "pause",
-        subTaskId: undefined,
-        startedAt: now,
-        status: "running",
-        pausedAt: undefined,
-        accumulatedPauseSeconds: 0,
-        accumulatedActiveSeconds: 0,
-        segmentStartedAt: now,
-        energy: undefined,
-        notesDraft: draftNote.trim() || "Pause",
-        createdAt: now,
-        updatedAt: now,
-      };
+  id: crypto.randomUUID(),
+  sectorId: "pause",
+  subTaskId: undefined,
+  startedAt: now,
+  status: "running",
+  pausedAt: undefined,
+  accumulatedPauseSeconds: 0,
+  accumulatedActiveSeconds: 0,
+  segmentStartedAt: now,
+  energy: undefined,
+  notesDraft: draftNote.trim() || "Pause",
+  tagNamesDraft: [],
+  createdAt: now,
+  updatedAt: now,
+};
 
       await sessionService.start(pauseSession);
       setDraftNote("");
+setSelectedTagNames([]);
+setNewTagInput("");
       await loadData();
     } finally {
       setActionLoading(false);
@@ -319,45 +340,91 @@ export function HomePage() {
                   Aucun secteur disponible. Il faudra en créer dans Paramètres.
                 </p>
               ) : (
-                <div className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr]">
-                  <div>
-                    <label
-                      htmlFor="sector"
-                      className="mb-2 block text-sm font-medium text-neutral-700"
-                    >
-                      Secteur
-                    </label>
-                    <select
-                      id="sector"
-                      value={selectedSectorId}
-                      onChange={(e) => setSelectedSectorId(e.target.value)}
-                      className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none ring-0"
-                    >
-                      {availableSectors.map((sector) => (
-                        <option key={sector.id} value={sector.id}>
-                          {sector.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="mt-5 grid gap-4 md:grid-cols-2">
+  <div>
+    <label
+      htmlFor="sector"
+      className="mb-2 block text-sm font-medium text-neutral-700"
+    >
+      Secteur
+    </label>
+    <select
+      id="sector"
+      value={selectedSectorId}
+      onChange={(e) => setSelectedSectorId(e.target.value)}
+      className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none ring-0"
+    >
+      {availableSectors.map((sector) => (
+        <option key={sector.id} value={sector.id}>
+          {sector.name}
+        </option>
+      ))}
+    </select>
+  </div>
 
-                  <div>
-                    <label
-                      htmlFor="note"
-                      className="mb-2 block text-sm font-medium text-neutral-700"
-                    >
-                      Note
-                    </label>
-                    <input
-                      id="note"
-                      type="text"
-                      value={draftNote}
-                      onChange={(e) => setDraftNote(e.target.value)}
-                      placeholder="Ex. classement, suivi, appels..."
-                      className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none ring-0"
-                    />
-                  </div>
-                </div>
+  <div>
+    <label
+      htmlFor="note"
+      className="mb-2 block text-sm font-medium text-neutral-700"
+    >
+      Note
+    </label>
+    <input
+      id="note"
+      type="text"
+      value={draftNote}
+      onChange={(e) => setDraftNote(e.target.value)}
+      placeholder="Ex. classement, suivi, appels..."
+      className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none ring-0"
+    />
+  </div>
+
+  <div className="md:col-span-2">
+    <label className="mb-2 block text-sm font-medium text-neutral-700">
+      Tags
+    </label>
+
+    {availableTags.length > 0 ? (
+      <div className="mb-3 flex flex-wrap gap-2">
+        {availableTags.map((tag) => {
+          const isSelected = selectedTagNames.includes(tag.name);
+
+          return (
+            <button
+              key={tag.id}
+              type="button"
+              onClick={() =>
+                setSelectedTagNames((prev) =>
+                  prev.includes(tag.name)
+                    ? prev.filter((name) => name !== tag.name)
+                    : [...prev, tag.name],
+                )
+              }
+              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                isSelected
+                  ? "bg-neutral-900 text-white"
+                  : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+              }`}
+            >
+              {tag.name}
+            </button>
+          );
+        })}
+      </div>
+    ) : null}
+
+    <input
+      type="text"
+      value={newTagInput}
+      onChange={(e) => setNewTagInput(e.target.value)}
+      placeholder="Ajouter de nouveaux tags, séparés par des virgules"
+      className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none ring-0"
+    />
+    <p className="mt-2 text-xs text-neutral-500">
+      Tu peux sélectionner des tags existants ou en créer de nouveaux.
+    </p>
+  </div>
+</div>
               )}
 
               {availableSectors.length > 0 ? (
@@ -407,32 +474,44 @@ export function HomePage() {
             Accès rapide aux premières vues de la V1.
           </p>
 
-<nav className="mt-5 flex flex-wrap gap-3">
-  <Link
-    to="/jour"
-    className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-medium text-white"
-  >
-    Suivi du jour
-  </Link>
-  <Link
-    to="/hebdo"
-    className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-  >
-    Suivi hebdo
-  </Link>
-  <Link
-    to="/historique"
-    className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-  >
-    Historique
-  </Link>
-  <Link
-    to="/parametres"
-    className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-  >
-    Paramètres
-  </Link>
-</nav>
+              <nav className="mt-5 flex flex-wrap gap-3">
+                <Link
+                  to="/jour"
+                  className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-medium text-white"
+                >
+                  Suivi du jour
+                </Link>
+                <Link
+                  to="/hebdo"
+                  className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Suivi hebdo
+                </Link>
+                <Link
+                  to="/mensuel"
+                  className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Suivi mensuel
+                </Link>
+                <Link
+                  to="/global"
+                  className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Vue globale
+                </Link>
+                <Link
+                  to="/historique"
+                  className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Historique
+                </Link>
+                <Link
+                  to="/parametres"
+                  className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Paramètres
+                </Link>
+              </nav>
         </section>
       </div>
     </main>
