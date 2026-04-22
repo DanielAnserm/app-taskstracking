@@ -3,10 +3,27 @@ import { DailyPage } from "../pages/DailyPage";
 import { HistoryPage } from "../pages/HistoryPage";
 import { HomePage } from "../pages/HomePage";
 import { SettingsPage } from "../pages/SettingsPage";
+import { WeeklyPage } from "../pages/WeeklyPage";
 
 export const router = createBrowserRouter([
-  { path: "/", element: <HomePage /> },
-  { path: "/jour", element: <DailyPage /> },
-  { path: "/historique", element: <HistoryPage /> },
-  { path: "/parametres", element: <SettingsPage /> },
+  {
+    path: "/",
+    element: <HomePage />,
+  },
+  {
+    path: "/jour",
+    element: <DailyPage />,
+  },
+  {
+    path: "/hebdo",
+    element: <WeeklyPage />,
+  },
+  {
+    path: "/historique",
+    element: <HistoryPage />,
+  },
+  {
+    path: "/parametres",
+    element: <SettingsPage />,
+  },
 ]);

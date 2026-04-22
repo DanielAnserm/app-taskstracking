@@ -112,19 +112,21 @@ export async function seedDemoData(): Promise<void> {
     },
   ];
 
-  const activeSession: ActiveSession = {
-    id: crypto.randomUUID(),
-    sectorId: "admin",
-    subTaskId: undefined,
-    startedAt: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 11, 30).toISOString(),
-    status: "running",
-    pausedAt: undefined,
-    accumulatedPauseSeconds: 0,
-    energy: "bon",
-    notesDraft: "Classement et suivi",
-    createdAt: now.toISOString(),
-    updatedAt: now.toISOString(),
-  };
+const activeSession: ActiveSession = {
+  id: crypto.randomUUID(),
+  sectorId: "admin",
+  subTaskId: undefined,
+  startedAt: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 11, 30).toISOString(),
+  status: "running",
+  pausedAt: undefined,
+  accumulatedPauseSeconds: 0,
+  accumulatedActiveSeconds: 0,
+  segmentStartedAt: new Date(now.getFullYear(), now.getMonth(), now.getDate(), 11, 30).toISOString(),
+  energy: "bon",
+  notesDraft: "Classement et suivi",
+  createdAt: now.toISOString(),
+  updatedAt: now.toISOString(),
+};
 
   await db.workSectors.bulkAdd(sectors);
   await db.timeEntries.bulkAdd(entries);

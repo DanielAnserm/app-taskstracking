@@ -1,5 +1,44 @@
+import { timeEntryRepository } from "../../repositories/timeEntryRepository";
 import { sessionRepository } from "../../repositories/sessionRepository";
-import type { ActiveSession, SessionStatus } from "../../types/domain";
+import type { ActiveSession, SessionStatus, TimeEntry } from "../../types/domain";
+
+function dateFromIso(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function diffSeconds(startIso: string, endIso: string): number {
+  return Math.max(
+    0,
+    Math.floor((new Date(endIso).getTime() - new Date(startIso).getTime()) / 1000),
+  );
+}
+
+function buildEntry(params: {
+  sectorId: string;
+  startAt: string;
+  endAt: string;
+  isPause: boolean;
+  notes?: string;
+  energy?: ActiveSession["energy"];
+}): TimeEntry {
+  const nowIso = new Date().toISOString();
+
+  return {
+    id: crypto.randomUUID(),
+    date: dateFromIso(params.startAt),
+    startAt: params.startAt,
+    endAt: params.endAt,
+    durationSeconds: diffSeconds(params.startAt, params.endAt),
+    sectorId: params.sectorId,
+    subTaskId: undefined,
+    energy: params.isPause ? undefined : params.energy,
+    notes: params.notes,
+    source: "live",
+    isPause: params.isPause,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+}
 
 export const sessionService = {
   async ensureNoOtherActiveSession(): Promise<void> {
@@ -27,27 +66,55 @@ export const sessionService = {
   },
 
   async setStatus(session: ActiveSession, status: SessionStatus): Promise<void> {
-    const now = new Date().toISOString();
+    const nowIso = new Date().toISOString();
 
     if (status === "paused") {
+      const segmentStart = session.segmentStartedAt ?? session.startedAt;
+      const workedSeconds = diffSeconds(segmentStart, nowIso);
+
+      if (workedSeconds > 0) {
+        await timeEntryRepository.create(
+          buildEntry({
+            sectorId: session.sectorId,
+            startAt: segmentStart,
+            endAt: nowIso,
+            isPause: false,
+            notes: session.notesDraft,
+            energy: session.energy,
+          }),
+        );
+      }
+
       await sessionRepository.save({
         ...session,
         status: "paused",
-        pausedAt: now,
-        updatedAt: now,
+        pausedAt: nowIso,
+        accumulatedActiveSeconds: (session.accumulatedActiveSeconds ?? 0) + workedSeconds,
+        updatedAt: nowIso,
       });
       return;
     }
 
     if (status === "running") {
-      let accumulatedPauseSeconds = session.accumulatedPauseSeconds;
+      if (!session.pausedAt) {
+        await sessionRepository.save({
+          ...session,
+          status: "running",
+          updatedAt: nowIso,
+        });
+        return;
+      }
 
-      if (session.pausedAt) {
-        const pauseStartedAt = new Date(session.pausedAt).getTime();
-        const resumedAt = new Date(now).getTime();
-        accumulatedPauseSeconds += Math.max(
-          0,
-          Math.floor((resumedAt - pauseStartedAt) / 1000),
+      const pauseSeconds = diffSeconds(session.pausedAt, nowIso);
+
+      if (pauseSeconds > 0) {
+        await timeEntryRepository.create(
+          buildEntry({
+            sectorId: "pause",
+            startAt: session.pausedAt,
+            endAt: nowIso,
+            isPause: true,
+          }),
         );
       }
 
@@ -55,8 +122,9 @@ export const sessionService = {
         ...session,
         status: "running",
         pausedAt: undefined,
-        accumulatedPauseSeconds,
-        updatedAt: now,
+        accumulatedPauseSeconds: (session.accumulatedPauseSeconds ?? 0) + pauseSeconds,
+        segmentStartedAt: nowIso,
+        updatedAt: nowIso,
       });
       return;
     }
@@ -64,12 +132,13 @@ export const sessionService = {
     await sessionRepository.save({
       ...session,
       status,
-      updatedAt: now,
+      updatedAt: nowIso,
     });
   },
 
   async pause(session: ActiveSession): Promise<void> {
     if (session.status !== "running") return;
+    if (session.sectorId === "pause") return;
     await this.setStatus(session, "paused");
   },
 
@@ -79,6 +148,27 @@ export const sessionService = {
   },
 
   async stop(session: ActiveSession): Promise<void> {
+    const nowIso = new Date().toISOString();
+
+    if (session.status === "running") {
+      const segmentStart = session.segmentStartedAt ?? session.startedAt;
+      const segmentSeconds = diffSeconds(segmentStart, nowIso);
+      const isPauseSession = session.sectorId === "pause";
+
+      if (segmentSeconds > 0) {
+        await timeEntryRepository.create(
+          buildEntry({
+            sectorId: isPauseSession ? "pause" : session.sectorId,
+            startAt: segmentStart,
+            endAt: nowIso,
+            isPause: isPauseSession,
+            notes: session.notesDraft,
+            energy: isPauseSession ? undefined : session.energy,
+          }),
+        );
+      }
+    }
+
     await sessionRepository.remove(session.id);
   },
 };

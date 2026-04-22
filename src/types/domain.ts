@@ -76,6 +76,8 @@ export interface ActiveSession {
   status: SessionStatus;
   pausedAt?: string;
   accumulatedPauseSeconds: number;
+  accumulatedActiveSeconds: number;
+  segmentStartedAt: string;
   energy?: EnergyLevel;
   notesDraft?: string;
   createdAt: string;
