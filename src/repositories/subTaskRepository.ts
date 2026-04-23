@@ -53,4 +53,42 @@ export const subTaskRepository = {
       updatedAt: new Date().toISOString(),
     });
   },
+
+  async getOrCreateByName(sectorId: string, name: string): Promise<SubTask> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      throw new Error("Le nom de la sous-tâche est vide.");
+    }
+
+    const existingSubTasks = await db.subTasks.where("sectorId").equals(sectorId).toArray();
+
+    const existing = existingSubTasks.find(
+      (subTask) => subTask.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+    );
+
+    if (existing) {
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    const nextDisplayOrder =
+      existingSubTasks.length > 0
+        ? Math.max(...existingSubTasks.map((subTask) => subTask.displayOrder)) + 1
+        : 1;
+
+    const newSubTask: SubTask = {
+      id: crypto.randomUUID(),
+      sectorId,
+      name: trimmedName,
+      defaultActionType: undefined,
+      displayOrder: nextDisplayOrder,
+      isActive: true,
+      isArchived: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await db.subTasks.put(newSubTask);
+    return newSubTask;
+  },
 };

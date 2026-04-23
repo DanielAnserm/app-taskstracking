@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
+import { subTaskRepository } from "../repositories/subTaskRepository";
 import { timeEntryRepository } from "../repositories/timeEntryRepository";
 import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
@@ -57,6 +58,7 @@ export function DailyPage() {
 
   const [selectedSectorId, setSelectedSectorId] = useState("");
   const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
+  const [newSubTaskName, setNewSubTaskName] = useState("");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [note, setNote] = useState("");
@@ -169,6 +171,7 @@ export function DailyPage() {
   function resetForm() {
     setEditingEntryId(null);
     setSelectedSubTaskId("");
+    setNewSubTaskName("");
     setStartTime("09:00");
     setEndTime("10:00");
     setNote("");
@@ -189,6 +192,7 @@ export function DailyPage() {
     setIsPause(entry.isPause);
     setSelectedSectorId(entry.isPause ? "" : entry.sectorId);
     setSelectedSubTaskId(entry.isPause ? "" : entry.subTaskId ?? "");
+    setNewSubTaskName("");
     setStartTime(isoToTimeInput(entry.startAt));
     setEndTime(isoToTimeInput(entry.endAt));
     setNote(entry.notes ?? "");
@@ -225,6 +229,16 @@ export function DailyPage() {
       return;
     }
 
+    let resolvedSubTaskId: string | undefined = isPause ? undefined : selectedSubTaskId || undefined;
+
+    if (!isPause && newSubTaskName.trim() && selectedSectorId) {
+      const createdSubTask = await subTaskRepository.getOrCreateByName(
+        selectedSectorId,
+        newSubTaskName,
+      );
+      resolvedSubTaskId = createdSubTask.id;
+    }
+
     const startAt = toIsoForToday(startTime);
     const endAt = toIsoForToday(endTime);
     const durationSeconds = diffSeconds(startAt, endAt);
@@ -252,7 +266,7 @@ export function DailyPage() {
           endAt,
           durationSeconds,
           sectorId: effectiveSectorId,
-          subTaskId: isPause ? undefined : selectedSubTaskId || undefined,
+          subTaskId: resolvedSubTaskId,
           energy: isPause ? undefined : existingEntry.energy ?? "bon",
           notes: note.trim() || undefined,
           isPause,
@@ -268,7 +282,7 @@ export function DailyPage() {
           endAt,
           durationSeconds,
           sectorId: effectiveSectorId,
-          subTaskId: isPause ? undefined : selectedSubTaskId || undefined,
+          subTaskId: resolvedSubTaskId,
           energy: isPause ? undefined : "bon",
           notes: note.trim() || undefined,
           source: "manual",
@@ -363,7 +377,7 @@ export function DailyPage() {
 
             <div>
               <label className="mb-2 block text-sm font-medium text-neutral-700">
-                Sous-tâche
+                Sous-tâche existante
               </label>
               <select
                 value={selectedSubTaskId}
@@ -378,6 +392,20 @@ export function DailyPage() {
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-neutral-700">
+                Nouvelle sous-tâche
+              </label>
+              <input
+                type="text"
+                value={newSubTaskName}
+                onChange={(e) => setNewSubTaskName(e.target.value)}
+                disabled={isPause}
+                placeholder="Ex. relance client, tri des mails..."
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+              />
             </div>
 
             <div>
@@ -426,8 +454,8 @@ export function DailyPage() {
                           )
                         }
                         className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
-                            ? "bg-neutral-900 text-white"
-                            : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                          ? "bg-neutral-900 text-white"
+                          : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
                           }`}
                       >
                         {tag.name}
@@ -530,8 +558,8 @@ export function DailyPage() {
                   <div
                     key={entry.id}
                     className={`rounded-2xl p-4 ring-1 ${isPauseEntry
-                        ? "bg-amber-50 ring-amber-200"
-                        : "bg-neutral-50 ring-neutral-200"
+                      ? "bg-amber-50 ring-amber-200"
+                      : "bg-neutral-50 ring-neutral-200"
                       }`}
                   >
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

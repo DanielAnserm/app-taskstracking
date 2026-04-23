@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { sessionService } from "../domain/timeTracking/sessionService";
 import { db } from "../db/database";
+import { subTaskRepository } from "../repositories/subTaskRepository";
 import type { ActiveSession, SubTask, Tag, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds, formatTimer } from "../utils/duration";
 
@@ -39,6 +40,7 @@ export function HomePage() {
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
   const [selectedSectorId, setSelectedSectorId] = useState("");
   const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
+  const [newSubTaskName, setNewSubTaskName] = useState("");
   const [draftNote, setDraftNote] = useState("");
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState("");
@@ -175,10 +177,20 @@ export function HomePage() {
 
       const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
 
+      let resolvedSubTaskId: string | undefined = selectedSubTaskId || undefined;
+
+      if (newSubTaskName.trim()) {
+        const createdSubTask = await subTaskRepository.getOrCreateByName(
+          selectedSectorId,
+          newSubTaskName,
+        );
+        resolvedSubTaskId = createdSubTask.id;
+      }
+
       const newSession: ActiveSession = {
         id: crypto.randomUUID(),
         sectorId: selectedSectorId,
-        subTaskId: selectedSubTaskId || undefined,
+        subTaskId: resolvedSubTaskId,
         startedAt: now,
         status: "running",
         pausedAt: undefined,
@@ -195,6 +207,7 @@ export function HomePage() {
       await sessionService.start(newSession);
       setDraftNote("");
       setSelectedSubTaskId("");
+      setNewSubTaskName("");
       setSelectedTagNames([]);
       setNewTagInput("");
       await loadData();
@@ -228,6 +241,7 @@ export function HomePage() {
       await sessionService.start(pauseSession);
       setDraftNote("");
       setSelectedSubTaskId("");
+      setNewSubTaskName("");
       setSelectedTagNames([]);
       setNewTagInput("");
       await loadData();
@@ -262,10 +276,10 @@ export function HomePage() {
             {currentSession?.status ? (
               <span
                 className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${isPauseSession
-                    ? "bg-amber-50 text-amber-700 ring-amber-200"
-                    : currentSession.status === "running"
-                      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                      : "bg-amber-50 text-amber-700 ring-amber-200"
+                  ? "bg-amber-50 text-amber-700 ring-amber-200"
+                  : currentSession.status === "running"
+                    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                    : "bg-amber-50 text-amber-700 ring-amber-200"
                   }`}
               >
                 {isPauseSession
@@ -429,7 +443,7 @@ export function HomePage() {
                       htmlFor="subtask"
                       className="mb-2 block text-sm font-medium text-neutral-700"
                     >
-                      Sous-tâche
+                      Sous-tâche existante
                     </label>
                     <select
                       id="subtask"
@@ -444,6 +458,23 @@ export function HomePage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="new-subtask"
+                      className="mb-2 block text-sm font-medium text-neutral-700"
+                    >
+                      Nouvelle sous-tâche
+                    </label>
+                    <input
+                      id="new-subtask"
+                      type="text"
+                      value={newSubTaskName}
+                      onChange={(e) => setNewSubTaskName(e.target.value)}
+                      placeholder="Ex. relance client, tri des mails..."
+                      className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none ring-0"
+                    />
                   </div>
 
                   <div className="md:col-span-2">
@@ -468,8 +499,8 @@ export function HomePage() {
                                 )
                               }
                               className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
-                                  ? "bg-neutral-900 text-white"
-                                  : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                                ? "bg-neutral-900 text-white"
+                                : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
                                 }`}
                             >
                               {tag.name}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
+import { subTaskRepository } from "../repositories/subTaskRepository";
 import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 
@@ -54,8 +55,9 @@ export function HistoryPage() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
   const [selectedSectorId, setSelectedSectorId] = useState("");
-  const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
-  const [startTime, setStartTime] = useState("09:00");
+const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
+const [newSubTaskName, setNewSubTaskName] = useState("");
+const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [note, setNote] = useState("");
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
@@ -163,7 +165,8 @@ export function HistoryPage() {
     setEditingEntryId(null);
     setEntryDate(new Date().toISOString().slice(0, 10));
     setSelectedSubTaskId("");
-    setStartTime("09:00");
+setNewSubTaskName("");
+setStartTime("09:00");
     setEndTime("10:00");
     setNote("");
     setSelectedTagNames([]);
@@ -186,7 +189,8 @@ export function HistoryPage() {
     setIsPause(entry.isPause);
     setSelectedSectorId(entry.isPause ? "" : entry.sectorId);
     setSelectedSubTaskId(entry.isPause ? "" : entry.subTaskId ?? "");
-    setNote(entry.notes ?? "");
+setNewSubTaskName("");
+setNote(entry.notes ?? "");
     setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
     setNewTagInput("");
     setErrorMessage("");
@@ -220,9 +224,19 @@ export function HistoryPage() {
       return;
     }
 
-    const startAt = toIsoForDate(entryDate, startTime);
-    const endAt = toIsoForDate(entryDate, endTime);
-    const durationSeconds = diffSeconds(startAt, endAt);
+    let resolvedSubTaskId: string | undefined = isPause ? undefined : selectedSubTaskId || undefined;
+
+if (!isPause && newSubTaskName.trim() && selectedSectorId) {
+  const createdSubTask = await subTaskRepository.getOrCreateByName(
+    selectedSectorId,
+    newSubTaskName,
+  );
+  resolvedSubTaskId = createdSubTask.id;
+}
+
+const startAt = toIsoForDate(entryDate, startTime);
+const endAt = toIsoForDate(entryDate, endTime);
+const durationSeconds = diffSeconds(startAt, endAt);
 
     if (durationSeconds <= 0) {
       setErrorMessage("L’heure de fin doit être après l’heure de début.");
@@ -251,7 +265,7 @@ export function HistoryPage() {
         endAt,
         durationSeconds,
         sectorId: effectiveSectorId,
-        subTaskId: isPause ? undefined : selectedSubTaskId || undefined,
+        subTaskId: resolvedSubTaskId,
         energy: isPause ? undefined : existingEntry.energy ?? "bon",
         notes: note.trim() || undefined,
         isPause,
@@ -332,24 +346,38 @@ export function HistoryPage() {
                 ))}
               </select>
             </div>
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700">
-                Sous-tâche
-              </label>
-              <select
-                value={selectedSubTaskId}
-                onChange={(e) => setSelectedSubTaskId(e.target.value)}
-                disabled={isPause}
-                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
-              >
-                <option value="">Aucune</option>
-                {filteredSubTasks.map((subTask) => (
-                  <option key={subTask.id} value={subTask.id}>
-                    {subTask.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+           <div>
+  <label className="mb-2 block text-sm font-medium text-neutral-700">
+    Sous-tâche existante
+  </label>
+  <select
+    value={selectedSubTaskId}
+    onChange={(e) => setSelectedSubTaskId(e.target.value)}
+    disabled={isPause}
+    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+  >
+    <option value="">Aucune</option>
+    {filteredSubTasks.map((subTask) => (
+      <option key={subTask.id} value={subTask.id}>
+        {subTask.name}
+      </option>
+    ))}
+  </select>
+</div>
+
+<div>
+  <label className="mb-2 block text-sm font-medium text-neutral-700">
+    Nouvelle sous-tâche
+  </label>
+  <input
+    type="text"
+    value={newSubTaskName}
+    onChange={(e) => setNewSubTaskName(e.target.value)}
+    disabled={isPause}
+    placeholder="Ex. relance client, tri des mails..."
+    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+  />
+</div>
 
             <div>
               <label className="mb-2 block text-sm font-medium text-neutral-700">
