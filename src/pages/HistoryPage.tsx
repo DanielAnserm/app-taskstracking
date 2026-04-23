@@ -5,6 +5,11 @@ import { db } from "../db/database";
 import { subTaskRepository } from "../repositories/subTaskRepository";
 import type { EntryAction, SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
+import {
+  findOverlappingEntries,
+  validateSectorSubTaskConsistency,
+  validateTimeRange,
+} from "../utils/validation";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
@@ -61,15 +66,15 @@ export function HistoryPage() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
   const [selectedSectorId, setSelectedSectorId] = useState("");
-const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
-const [newSubTaskName, setNewSubTaskName] = useState("");
-const [startTime, setStartTime] = useState("09:00");
+  const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
+  const [newSubTaskName, setNewSubTaskName] = useState("");
+  const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [note, setNote] = useState("");
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
-const [newTagInput, setNewTagInput] = useState("");
-const [actionDrafts, setActionDrafts] = useState<ActionDraft[]>([]);
-const [isPause, setIsPause] = useState(false);
+  const [newTagInput, setNewTagInput] = useState("");
+  const [actionDrafts, setActionDrafts] = useState<ActionDraft[]>([]);
+  const [isPause, setIsPause] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   async function loadData() {
@@ -95,17 +100,17 @@ const [isPause, setIsPause] = useState(false);
         const sector = await db.workSectors.get(entry.sectorId);
         const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
         const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
-const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
-const tags = tagResults.filter(Boolean) as Tag[];
-const actions = await db.entryActions.where("timeEntryId").equals(entry.id).toArray();
+        const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
+        const tags = tagResults.filter(Boolean) as Tag[];
+        const actions = await db.entryActions.where("timeEntryId").equals(entry.id).toArray();
 
-return {
-  ...entry,
-  sector,
-  subTask,
-  tags,
-  actions,
-};
+        return {
+          ...entry,
+          sector,
+          subTask,
+          tags,
+          actions,
+        };
       }),
     );
 
@@ -174,14 +179,14 @@ return {
     setEditingEntryId(null);
     setEntryDate(new Date().toISOString().slice(0, 10));
     setSelectedSubTaskId("");
-setNewSubTaskName("");
-setStartTime("09:00");
+    setNewSubTaskName("");
+    setStartTime("09:00");
     setEndTime("10:00");
     setNote("");
-setSelectedTagNames([]);
-setNewTagInput("");
-setActionDrafts([]);
-setIsPause(false);
+    setSelectedTagNames([]);
+    setNewTagInput("");
+    setActionDrafts([]);
+    setIsPause(false);
     setErrorMessage("");
 
     if (availableSectors.length > 0) {
@@ -190,29 +195,29 @@ setIsPause(false);
       setSelectedSectorId("");
     }
   }
-function addActionDraft() {
-  setActionDrafts((prev) => [...prev, { actionType: "", quantity: 1 }]);
-}
+  function addActionDraft() {
+    setActionDrafts((prev) => [...prev, { actionType: "", quantity: 1 }]);
+  }
 
-function updateActionDraft(index: number, updates: Partial<ActionDraft>) {
-  setActionDrafts((prev) =>
-    prev.map((action, i) => (i === index ? { ...action, ...updates } : action)),
-  );
-}
+  function updateActionDraft(index: number, updates: Partial<ActionDraft>) {
+    setActionDrafts((prev) =>
+      prev.map((action, i) => (i === index ? { ...action, ...updates } : action)),
+    );
+  }
 
-function removeActionDraft(index: number) {
-  setActionDrafts((prev) => prev.filter((_, i) => i !== index));
-}
+  function removeActionDraft(index: number) {
+    setActionDrafts((prev) => prev.filter((_, i) => i !== index));
+  }
 
-function hasActions(actions?: EntryAction[]): boolean {
-  return Boolean(actions && actions.length > 0);
-}
+  function hasActions(actions?: EntryAction[]): boolean {
+    return Boolean(actions && actions.length > 0);
+  }
 
-function formatActionLabel(action: EntryAction): string {
-  return `${action.actionType} · ${action.quantity}`;
-}
+  function formatActionLabel(action: EntryAction): string {
+    return `${action.actionType} · ${action.quantity}`;
+  }
 
-function handleEditEntry(entry: EntryWithSector) {
+  function handleEditEntry(entry: EntryWithSector) {
 
     setEditingEntryId(entry.id);
     setEntryDate(isoToDateInput(entry.startAt));
@@ -221,17 +226,17 @@ function handleEditEntry(entry: EntryWithSector) {
     setIsPause(entry.isPause);
     setSelectedSectorId(entry.isPause ? "" : entry.sectorId);
     setSelectedSubTaskId(entry.isPause ? "" : entry.subTaskId ?? "");
-setNewSubTaskName("");
-setNote(entry.notes ?? "");
-setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
-setNewTagInput("");
-setActionDrafts(
-  entry.actions?.map((action) => ({
-    actionType: action.actionType,
-    quantity: action.quantity,
-  })) ?? [],
-);
-setErrorMessage("");
+    setNewSubTaskName("");
+    setNote(entry.notes ?? "");
+    setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
+    setNewTagInput("");
+    setActionDrafts(
+      entry.actions?.map((action) => ({
+        actionType: action.actionType,
+        quantity: action.quantity,
+      })) ?? [],
+    );
+    setErrorMessage("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -256,12 +261,12 @@ setErrorMessage("");
 
     const effectiveSectorId = isPause ? "pause" : selectedSectorId;
     const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
-const actionsPayload = actionDrafts
-  .map((action) => ({
-    actionType: action.actionType.trim(),
-    quantity: Number(action.quantity),
-  }))
-  .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
+    const actionsPayload = actionDrafts
+      .map((action) => ({
+        actionType: action.actionType.trim(),
+        quantity: Number(action.quantity),
+      }))
+      .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
 
     if (!effectiveSectorId) {
       setErrorMessage("Choisis un secteur.");
@@ -270,20 +275,48 @@ const actionsPayload = actionDrafts
 
     let resolvedSubTaskId: string | undefined = isPause ? undefined : selectedSubTaskId || undefined;
 
-if (!isPause && newSubTaskName.trim() && selectedSectorId) {
-  const createdSubTask = await subTaskRepository.getOrCreateByName(
-    selectedSectorId,
-    newSubTaskName,
-  );
-  resolvedSubTaskId = createdSubTask.id;
-}
+    if (!isPause && newSubTaskName.trim() && selectedSectorId) {
+      const createdSubTask = await subTaskRepository.getOrCreateByName(
+        selectedSectorId,
+        newSubTaskName,
+      );
+      resolvedSubTaskId = createdSubTask.id;
+    }
 
-const startAt = toIsoForDate(entryDate, startTime);
-const endAt = toIsoForDate(entryDate, endTime);
-const durationSeconds = diffSeconds(startAt, endAt);
+    const subTaskConsistency = validateSectorSubTaskConsistency({
+      sectorId: effectiveSectorId,
+      subTaskId: resolvedSubTaskId,
+      availableSubTasks,
+      isPause,
+    });
 
-    if (durationSeconds <= 0) {
-      setErrorMessage("L’heure de fin doit être après l’heure de début.");
+    if (!subTaskConsistency.isValid) {
+      setErrorMessage(subTaskConsistency.error ?? "Sous-tâche invalide.");
+      return;
+    }
+
+    const startAt = toIsoForDate(entryDate, startTime);
+    const endAt = toIsoForDate(entryDate, endTime);
+    const durationSeconds = diffSeconds(startAt, endAt);
+
+    const timeRangeValidation = validateTimeRange(startAt, endAt);
+
+    if (!timeRangeValidation.isValid) {
+      setErrorMessage(timeRangeValidation.error ?? "Plage horaire invalide.");
+      return;
+    }
+
+    const overlapValidation = findOverlappingEntries(entries, {
+      startAt,
+      endAt,
+      date: entryDate,
+      excludeEntryId: editingEntryId ?? undefined,
+    });
+
+    if (overlapValidation.hasOverlap) {
+      setErrorMessage(
+        overlapValidation.error ?? "Cette plage horaire chevauche une autre entrée existante.",
+      );
       return;
     }
 
@@ -390,38 +423,38 @@ const durationSeconds = diffSeconds(startAt, endAt);
                 ))}
               </select>
             </div>
-           <div>
-  <label className="mb-2 block text-sm font-medium text-neutral-700">
-    Sous-tâche existante
-  </label>
-  <select
-    value={selectedSubTaskId}
-    onChange={(e) => setSelectedSubTaskId(e.target.value)}
-    disabled={isPause}
-    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
-  >
-    <option value="">Aucune</option>
-    {filteredSubTasks.map((subTask) => (
-      <option key={subTask.id} value={subTask.id}>
-        {subTask.name}
-      </option>
-    ))}
-  </select>
-</div>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-neutral-700">
+                Sous-tâche existante
+              </label>
+              <select
+                value={selectedSubTaskId}
+                onChange={(e) => setSelectedSubTaskId(e.target.value)}
+                disabled={isPause}
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+              >
+                <option value="">Aucune</option>
+                {filteredSubTasks.map((subTask) => (
+                  <option key={subTask.id} value={subTask.id}>
+                    {subTask.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-<div>
-  <label className="mb-2 block text-sm font-medium text-neutral-700">
-    Nouvelle sous-tâche
-  </label>
-  <input
-    type="text"
-    value={newSubTaskName}
-    onChange={(e) => setNewSubTaskName(e.target.value)}
-    disabled={isPause}
-    placeholder="Ex. relance client, tri des mails..."
-    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
-  />
-</div>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-neutral-700">
+                Nouvelle sous-tâche
+              </label>
+              <input
+                type="text"
+                value={newSubTaskName}
+                onChange={(e) => setNewSubTaskName(e.target.value)}
+                disabled={isPause}
+                placeholder="Ex. relance client, tri des mails..."
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+              />
+            </div>
 
             <div>
               <label className="mb-2 block text-sm font-medium text-neutral-700">
@@ -457,68 +490,68 @@ const durationSeconds = diffSeconds(startAt, endAt);
                 className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
               />
             </div>
-    <div className="lg:col-span-2">
-  <div className="mb-2 flex items-center justify-between gap-3">
-    <label className="block text-sm font-medium text-neutral-700">
-      Actions / quantités
-    </label>
+            <div className="lg:col-span-2">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <label className="block text-sm font-medium text-neutral-700">
+                  Actions / quantités
+                </label>
 
-    <button
-      type="button"
-      onClick={addActionDraft}
-      disabled={isPause}
-      className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
-    >
-      Ajouter une action
-    </button>
-  </div>
+                <button
+                  type="button"
+                  onClick={addActionDraft}
+                  disabled={isPause}
+                  className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                >
+                  Ajouter une action
+                </button>
+              </div>
 
-  {actionDrafts.length === 0 ? (
-    <p className="text-xs text-neutral-500">
-      Aucune action ajoutée.
-    </p>
-  ) : (
-    <div className="space-y-3">
-      {actionDrafts.map((action, index) => (
-        <div
-          key={index}
-          className="grid gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3 md:grid-cols-[1fr_160px_auto]"
-        >
-          <input
-            type="text"
-            value={action.actionType}
-            onChange={(e) =>
-              updateActionDraft(index, { actionType: e.target.value })
-            }
-            placeholder="Ex. appels, emails, dossiers"
-            disabled={isPause}
-            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
-          />
+              {actionDrafts.length === 0 ? (
+                <p className="text-xs text-neutral-500">
+                  Aucune action ajoutée.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {actionDrafts.map((action, index) => (
+                    <div
+                      key={index}
+                      className="grid gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3 md:grid-cols-[1fr_160px_auto]"
+                    >
+                      <input
+                        type="text"
+                        value={action.actionType}
+                        onChange={(e) =>
+                          updateActionDraft(index, { actionType: e.target.value })
+                        }
+                        placeholder="Ex. appels, emails, dossiers"
+                        disabled={isPause}
+                        className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+                      />
 
-          <input
-            type="number"
-            min="1"
-            value={action.quantity}
-            onChange={(e) =>
-              updateActionDraft(index, { quantity: Number(e.target.value) || 0 })
-            }
-            disabled={isPause}
-            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
-          />
+                      <input
+                        type="number"
+                        min="1"
+                        value={action.quantity}
+                        onChange={(e) =>
+                          updateActionDraft(index, { quantity: Number(e.target.value) || 0 })
+                        }
+                        disabled={isPause}
+                        className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+                      />
 
-          <button
-            type="button"
-            onClick={() => removeActionDraft(index)}
-            disabled={isPause}
-            className="rounded-full bg-red-100 px-4 py-3 text-sm font-medium text-red-800 ring-1 ring-red-200 hover:bg-red-200 disabled:opacity-50"
-          >
-            Supprimer
-          </button>
-        </div>
-      ))}
-    </div>
-  )}
-</div>
+                      <button
+                        type="button"
+                        onClick={() => removeActionDraft(index)}
+                        disabled={isPause}
+                        className="rounded-full bg-red-100 px-4 py-3 text-sm font-medium text-red-800 ring-1 ring-red-200 hover:bg-red-200 disabled:opacity-50"
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="lg:col-span-2">
               <label className="mb-2 block text-sm font-medium text-neutral-700">
@@ -542,8 +575,8 @@ const durationSeconds = diffSeconds(startAt, endAt);
                           )
                         }
                         className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
-                            ? "bg-neutral-900 text-white"
-                            : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                          ? "bg-neutral-900 text-white"
+                          : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
                           }`}
                       >
                         {tag.name}
@@ -653,8 +686,8 @@ const durationSeconds = diffSeconds(startAt, endAt);
                   <div
                     key={entry.id}
                     className={`rounded-2xl p-4 ring-1 ${isPauseEntry
-                        ? "bg-amber-50 ring-amber-200"
-                        : "bg-neutral-50 ring-neutral-200"
+                      ? "bg-amber-50 ring-amber-200"
+                      : "bg-neutral-50 ring-neutral-200"
                       }`}
                   >
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -708,17 +741,17 @@ const durationSeconds = diffSeconds(startAt, endAt);
                           </div>
                         ) : null}
                         {hasActions(entry.actions) ? (
-  <div className="mt-3 flex flex-wrap gap-2">
-    {entry.actions!.map((action) => (
-      <span
-        key={action.id}
-        className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800"
-      >
-        {formatActionLabel(action)}
-      </span>
-    ))}
-  </div>
-) : null}
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {entry.actions!.map((action) => (
+                              <span
+                                key={action.id}
+                                className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800"
+                              >
+                                {formatActionLabel(action)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">

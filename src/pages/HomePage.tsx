@@ -6,6 +6,7 @@ import { db } from "../db/database";
 import { subTaskRepository } from "../repositories/subTaskRepository";
 import type { ActiveSession, SubTask, Tag, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds, formatTimer } from "../utils/duration";
+import { validateSectorSubTaskConsistency } from "../utils/validation";
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10);
@@ -50,6 +51,7 @@ export function HomePage() {
   const [loading, setLoading] = useState(true);
   const [clockMs, setClockMs] = useState(Date.now());
   const [actionLoading, setActionLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   async function loadData() {
     const session = await sessionService.getCurrent();
@@ -171,6 +173,7 @@ export function HomePage() {
   async function handleStartTask() {
     if (!selectedSectorId) return;
 
+    setErrorMessage("");
     setActionLoading(true);
     try {
       const now = new Date().toISOString();
@@ -186,6 +189,19 @@ export function HomePage() {
         );
         resolvedSubTaskId = createdSubTask.id;
       }
+      const subTaskConsistency = validateSectorSubTaskConsistency({
+        sectorId: selectedSectorId,
+        subTaskId: resolvedSubTaskId,
+        availableSubTasks,
+        isPause: false,
+      });
+
+      if (!subTaskConsistency.isValid) {
+        setErrorMessage(subTaskConsistency.error ?? "Sous-tâche invalide.");
+        setActionLoading(false);
+        return;
+      }
+
 
       const newSession: ActiveSession = {
         id: crypto.randomUUID(),
@@ -523,6 +539,10 @@ export function HomePage() {
                   </div>
                 </div>
               )}
+
+              {errorMessage ? (
+                <p className="mt-4 text-sm font-medium text-red-600">{errorMessage}</p>
+              ) : null}
 
               {availableSectors.length > 0 ? (
                 <div className="mt-4 flex flex-wrap gap-3">
