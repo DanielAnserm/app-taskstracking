@@ -1,5 +1,6 @@
 import { db } from "../../db/database";
-import type { Tag, TimeEntry } from "../../types/domain";
+import { actionRepository } from "../../repositories/actionRepository";
+import type { EntryAction, Tag, TimeEntry } from "../../types/domain";
 
 function normalizeTagNames(tagNames: string[]): string[] {
   const seen = new Set<string>();
@@ -72,24 +73,67 @@ async function syncTagsForEntry(entryId: string, tagNames: string[]): Promise<vo
   await db.timeEntryTags.bulkPut(links);
 }
 
+function normalizeActions(
+  timeEntryId: string,
+  actions: Array<{
+    actionType: string;
+    quantity: number;
+  }>,
+): EntryAction[] {
+  return actions
+    .map((action) => ({
+      actionType: action.actionType.trim(),
+      quantity: Number(action.quantity),
+    }))
+    .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0)
+    .map((action) => ({
+      id: crypto.randomUUID(),
+      timeEntryId,
+      actionType: action.actionType,
+      quantity: action.quantity,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }));
+}
+
 export const entryService = {
-  async createEntry(entry: TimeEntry, tagNames: string[] = []): Promise<string> {
+  async createEntry(
+    entry: TimeEntry,
+    tagNames: string[] = [],
+    actions: Array<{ actionType: string; quantity: number }> = [],
+  ): Promise<string> {
     await db.timeEntries.put(entry);
     await syncTagsForEntry(entry.id, tagNames);
+
+    const normalizedActions = normalizeActions(entry.id, actions);
+    await actionRepository.replaceForEntry(entry.id, normalizedActions);
+
     return entry.id;
   },
 
-  async createManualEntry(entry: TimeEntry, tagNames: string[] = []): Promise<string> {
-    return this.createEntry(entry, tagNames);
+  async createManualEntry(
+    entry: TimeEntry,
+    tagNames: string[] = [],
+    actions: Array<{ actionType: string; quantity: number }> = [],
+  ): Promise<string> {
+    return this.createEntry(entry, tagNames, actions);
   },
 
-  async updateEntry(entry: TimeEntry, tagNames: string[] = []): Promise<void> {
+  async updateEntry(
+    entry: TimeEntry,
+    tagNames: string[] = [],
+    actions: Array<{ actionType: string; quantity: number }> = [],
+  ): Promise<void> {
     await db.timeEntries.put(entry);
     await syncTagsForEntry(entry.id, tagNames);
+
+    const normalizedActions = normalizeActions(entry.id, actions);
+    await actionRepository.replaceForEntry(entry.id, normalizedActions);
   },
 
   async deleteEntry(id: string): Promise<void> {
     await db.timeEntryTags.where("timeEntryId").equals(id).delete();
+    await actionRepository.deleteByEntryId(id);
     await db.timeEntries.delete(id);
   },
 };

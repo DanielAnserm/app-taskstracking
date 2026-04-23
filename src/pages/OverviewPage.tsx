@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { db } from "../db/database";
-import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
+import type { EntryAction, SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
   subTask?: SubTask;
   tags?: Tag[];
+  actions?: EntryAction[];
 }
 
 type RangeKey = "7d" | "30d" | "90d";
@@ -36,6 +37,12 @@ interface SubTaskBucket {
   subTaskId: string;
   subTaskName: string;
   activeSeconds: number;
+}
+
+interface ActionBucket {
+  actionType: string;
+  totalQuantity: number;
+  entryCount: number;
 }
 
 interface ProductiveDay {
@@ -106,17 +113,19 @@ export function OverviewPage() {
       const enrichedEntries = await Promise.all(
         rawEntries.map(async (entry) => {
           const sector = await db.workSectors.get(entry.sectorId);
-          const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
-          const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
-          const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
-          const tags = tagResults.filter(Boolean) as Tag[];
+const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
+const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
+const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
+const tags = tagResults.filter(Boolean) as Tag[];
+const actions = await db.entryActions.where("timeEntryId").equals(entry.id).toArray();
 
-          return {
-            ...entry,
-            sector,
-            subTask,
-            tags,
-          };
+return {
+  ...entry,
+  sector,
+  subTask,
+  tags,
+  actions,
+};
         }),
       );
 
@@ -218,6 +227,40 @@ export function OverviewPage() {
 
     return Array.from(map.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
   }, [activeEntries]);
+  const actionBuckets = useMemo<ActionBucket[]>(() => {
+  const map = new Map<string, ActionBucket>();
+
+  for (const entry of activeEntries) {
+    const entryActions = entry.actions ?? [];
+
+    for (const action of entryActions) {
+      const key = action.actionType.trim().toLowerCase();
+      const existing = map.get(key);
+
+      if (existing) {
+        existing.totalQuantity += action.quantity;
+        existing.entryCount += 1;
+      } else {
+        map.set(key, {
+          actionType: action.actionType,
+          totalQuantity: action.quantity,
+          entryCount: 1,
+        });
+      }
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
+}, [activeEntries]);
+
+const totalActionQuantity = actionBuckets.reduce(
+  (sum, action) => sum + action.totalQuantity,
+  0,
+);
+
+const entriesWithActionsCount = activeEntries.filter(
+  (entry) => (entry.actions?.length ?? 0) > 0,
+).length;
   const tagBuckets = useMemo<TagBucket[]>(() => {
     const map = new Map<string, TagBucket>();
 
@@ -397,7 +440,7 @@ export function OverviewPage() {
           </div>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
             <p className="text-sm font-medium text-neutral-500">Temps actif</p>
             <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
@@ -425,6 +468,20 @@ export function OverviewPage() {
               {activeDays}
             </p>
           </div>
+<div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+  <p className="text-sm font-medium text-neutral-500">Volume d’actions</p>
+  <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
+    {totalActionQuantity}
+  </p>
+</div>
+
+<div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+  <p className="text-sm font-medium text-neutral-500">Entrées avec actions</p>
+  <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
+    {entriesWithActionsCount}
+  </p>
+</div>
+
         </section>
 
         {loading ? (
@@ -580,7 +637,7 @@ export function OverviewPage() {
               </div>
             </section>
 
-            <section className="grid gap-4 xl:grid-cols-4">
+            <section className="grid gap-4 xl:grid-cols-5">
               <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
                 <h2 className="text-xl font-semibold text-neutral-900">
                   Répartition par jour de la semaine
@@ -675,6 +732,40 @@ export function OverviewPage() {
                   </div>
                 )}
               </div>
+<div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
+  <h2 className="text-xl font-semibold text-neutral-900">Top actions</h2>
+
+  {actionBuckets.length === 0 ? (
+    <p className="mt-4 text-sm text-neutral-600">
+      Aucune action associée aux entrées de travail sur cette période.
+    </p>
+  ) : (
+    <div className="mt-5 space-y-3">
+      {actionBuckets.map((action, index) => (
+        <div
+          key={`${action.actionType}-${index}`}
+          className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
+                #{index + 1}
+              </span>
+              <div>
+                <p className="font-semibold text-neutral-900">{action.actionType}</p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Présente dans {action.entryCount} entrée{action.entryCount > 1 ? "s" : ""}
+                </p>
+              </div>
+            </div>
+            <p className="font-semibold text-neutral-900">{action.totalQuantity}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+
               <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
                 <h2 className="text-xl font-semibold text-neutral-900">Top tags</h2>
 

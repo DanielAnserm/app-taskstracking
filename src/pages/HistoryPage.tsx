@@ -3,13 +3,19 @@ import { Link } from "react-router-dom";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
 import { subTaskRepository } from "../repositories/subTaskRepository";
-import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
+import type { EntryAction, SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
   subTask?: SubTask;
   tags?: Tag[];
+  actions?: EntryAction[];
+}
+
+interface ActionDraft {
+  actionType: string;
+  quantity: number;
 }
 
 type SortOrder = "asc" | "desc";
@@ -61,8 +67,9 @@ const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [note, setNote] = useState("");
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
-  const [newTagInput, setNewTagInput] = useState("");
-  const [isPause, setIsPause] = useState(false);
+const [newTagInput, setNewTagInput] = useState("");
+const [actionDrafts, setActionDrafts] = useState<ActionDraft[]>([]);
+const [isPause, setIsPause] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   async function loadData() {
@@ -88,15 +95,17 @@ const [startTime, setStartTime] = useState("09:00");
         const sector = await db.workSectors.get(entry.sectorId);
         const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
         const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
-        const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
-        const tags = tagResults.filter(Boolean) as Tag[];
+const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
+const tags = tagResults.filter(Boolean) as Tag[];
+const actions = await db.entryActions.where("timeEntryId").equals(entry.id).toArray();
 
-        return {
-          ...entry,
-          sector,
-          subTask,
-          tags,
-        };
+return {
+  ...entry,
+  sector,
+  subTask,
+  tags,
+  actions,
+};
       }),
     );
 
@@ -169,9 +178,10 @@ setNewSubTaskName("");
 setStartTime("09:00");
     setEndTime("10:00");
     setNote("");
-    setSelectedTagNames([]);
-    setNewTagInput("");
-    setIsPause(false);
+setSelectedTagNames([]);
+setNewTagInput("");
+setActionDrafts([]);
+setIsPause(false);
     setErrorMessage("");
 
     if (availableSectors.length > 0) {
@@ -180,8 +190,30 @@ setStartTime("09:00");
       setSelectedSectorId("");
     }
   }
+function addActionDraft() {
+  setActionDrafts((prev) => [...prev, { actionType: "", quantity: 1 }]);
+}
 
-  function handleEditEntry(entry: EntryWithSector) {
+function updateActionDraft(index: number, updates: Partial<ActionDraft>) {
+  setActionDrafts((prev) =>
+    prev.map((action, i) => (i === index ? { ...action, ...updates } : action)),
+  );
+}
+
+function removeActionDraft(index: number) {
+  setActionDrafts((prev) => prev.filter((_, i) => i !== index));
+}
+
+function hasActions(actions?: EntryAction[]): boolean {
+  return Boolean(actions && actions.length > 0);
+}
+
+function formatActionLabel(action: EntryAction): string {
+  return `${action.actionType} · ${action.quantity}`;
+}
+
+function handleEditEntry(entry: EntryWithSector) {
+
     setEditingEntryId(entry.id);
     setEntryDate(isoToDateInput(entry.startAt));
     setStartTime(isoToTimeInput(entry.startAt));
@@ -191,9 +223,15 @@ setStartTime("09:00");
     setSelectedSubTaskId(entry.isPause ? "" : entry.subTaskId ?? "");
 setNewSubTaskName("");
 setNote(entry.notes ?? "");
-    setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
-    setNewTagInput("");
-    setErrorMessage("");
+setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
+setNewTagInput("");
+setActionDrafts(
+  entry.actions?.map((action) => ({
+    actionType: action.actionType,
+    quantity: action.quantity,
+  })) ?? [],
+);
+setErrorMessage("");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -218,6 +256,12 @@ setNote(entry.notes ?? "");
 
     const effectiveSectorId = isPause ? "pause" : selectedSectorId;
     const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
+const actionsPayload = actionDrafts
+  .map((action) => ({
+    actionType: action.actionType.trim(),
+    quantity: Number(action.quantity),
+  }))
+  .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
 
     if (!effectiveSectorId) {
       setErrorMessage("Choisis un secteur.");
@@ -272,7 +316,7 @@ const durationSeconds = diffSeconds(startAt, endAt);
         updatedAt: nowIso,
       };
 
-      await entryService.updateEntry(updatedEntry, tagNames);
+      await entryService.updateEntry(updatedEntry, tagNames, actionsPayload);
       resetForm();
       await loadData();
     } finally {
@@ -413,6 +457,68 @@ const durationSeconds = diffSeconds(startAt, endAt);
                 className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
               />
             </div>
+    <div className="lg:col-span-2">
+  <div className="mb-2 flex items-center justify-between gap-3">
+    <label className="block text-sm font-medium text-neutral-700">
+      Actions / quantités
+    </label>
+
+    <button
+      type="button"
+      onClick={addActionDraft}
+      disabled={isPause}
+      className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+    >
+      Ajouter une action
+    </button>
+  </div>
+
+  {actionDrafts.length === 0 ? (
+    <p className="text-xs text-neutral-500">
+      Aucune action ajoutée.
+    </p>
+  ) : (
+    <div className="space-y-3">
+      {actionDrafts.map((action, index) => (
+        <div
+          key={index}
+          className="grid gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3 md:grid-cols-[1fr_160px_auto]"
+        >
+          <input
+            type="text"
+            value={action.actionType}
+            onChange={(e) =>
+              updateActionDraft(index, { actionType: e.target.value })
+            }
+            placeholder="Ex. appels, emails, dossiers"
+            disabled={isPause}
+            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+          />
+
+          <input
+            type="number"
+            min="1"
+            value={action.quantity}
+            onChange={(e) =>
+              updateActionDraft(index, { quantity: Number(e.target.value) || 0 })
+            }
+            disabled={isPause}
+            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+          />
+
+          <button
+            type="button"
+            onClick={() => removeActionDraft(index)}
+            disabled={isPause}
+            className="rounded-full bg-red-100 px-4 py-3 text-sm font-medium text-red-800 ring-1 ring-red-200 hover:bg-red-200 disabled:opacity-50"
+          >
+            Supprimer
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 
             <div className="lg:col-span-2">
               <label className="mb-2 block text-sm font-medium text-neutral-700">
@@ -601,6 +707,18 @@ const durationSeconds = diffSeconds(startAt, endAt);
                             ))}
                           </div>
                         ) : null}
+                        {hasActions(entry.actions) ? (
+  <div className="mt-3 flex flex-wrap gap-2">
+    {entry.actions!.map((action) => (
+      <span
+        key={action.id}
+        className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800"
+      >
+        {formatActionLabel(action)}
+      </span>
+    ))}
+  </div>
+) : null}
                       </div>
 
                       <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">
