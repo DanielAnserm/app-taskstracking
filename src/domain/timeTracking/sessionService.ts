@@ -15,12 +15,14 @@ function diffSeconds(startIso: string, endIso: string): number {
 
 function buildEntry(params: {
   sectorId: string;
+  subTaskId?: string;
   startAt: string;
   endAt: string;
   isPause: boolean;
   notes?: string;
   energy?: ActiveSession["energy"];
 }): TimeEntry {
+
   const nowIso = new Date().toISOString();
 
   return {
@@ -30,7 +32,7 @@ function buildEntry(params: {
     endAt: params.endAt,
     durationSeconds: diffSeconds(params.startAt, params.endAt),
     sectorId: params.sectorId,
-    subTaskId: undefined,
+    subTaskId: params.subTaskId,
     energy: params.isPause ? undefined : params.energy,
     notes: params.notes,
     source: "live",
@@ -74,14 +76,17 @@ export const sessionService = {
 
       if (workedSeconds > 0) {
   await entryService.createEntry(
+    
     buildEntry({
-      sectorId: session.sectorId,
-      startAt: segmentStart,
-      endAt: nowIso,
-      isPause: false,
-      notes: session.notesDraft,
-      energy: session.energy,
-    }),
+  sectorId: session.sectorId,
+  subTaskId: session.subTaskId,
+  startAt: segmentStart,
+  endAt: nowIso,
+  isPause: false,
+  notes: session.notesDraft,
+  energy: session.energy,
+}),
+
     session.tagNamesDraft ?? [],
   );
 }
@@ -159,13 +164,14 @@ export const sessionService = {
       if (segmentSeconds > 0) {
   await entryService.createEntry(
     buildEntry({
-      sectorId: isPauseSession ? "pause" : session.sectorId,
-      startAt: segmentStart,
-      endAt: nowIso,
-      isPause: isPauseSession,
-      notes: session.notesDraft,
-      energy: isPauseSession ? undefined : session.energy,
-    }),
+  sectorId: isPauseSession ? "pause" : session.sectorId,
+  subTaskId: isPauseSession ? undefined : session.subTaskId,
+  startAt: segmentStart,
+  endAt: nowIso,
+  isPause: isPauseSession,
+  notes: session.notesDraft,
+  energy: isPauseSession ? undefined : session.energy,
+}),
     isPauseSession ? [] : session.tagNamesDraft ?? [],
   );
 }

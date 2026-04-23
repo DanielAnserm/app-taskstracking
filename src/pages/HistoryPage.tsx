@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
-import type { Tag, TimeEntry, WorkSector } from "../types/domain";
+import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
+  subTask?: SubTask;
   tags?: Tag[];
 }
 
@@ -44,6 +45,7 @@ function parseTagInput(input: string): string[] {
 export function HistoryPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
   const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+  const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -52,6 +54,7 @@ export function HistoryPage() {
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10));
   const [selectedSectorId, setSelectedSectorId] = useState("");
+  const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
   const [startTime, setStartTime] = useState("09:00");
   const [endTime, setEndTime] = useState("10:00");
   const [note, setNote] = useState("");
@@ -63,6 +66,7 @@ export function HistoryPage() {
   async function loadData() {
     const rawEntries = await db.timeEntries.toArray();
     const allSectors = await db.workSectors.toArray();
+    const allSubTasks = await db.subTasks.toArray();
     const allTags = await db.tags.toArray();
 
     const usableSectors = allSectors
@@ -73,9 +77,14 @@ export function HistoryPage() {
       .filter((tag) => tag.isActive && !tag.isArchived)
       .sort((a, b) => a.name.localeCompare(b.name, "fr"));
 
+    const usableSubTasks = allSubTasks
+      .filter((subTask) => subTask.isActive && !subTask.isArchived)
+      .sort((a, b) => a.displayOrder - b.displayOrder);
+
     const enrichedEntries = await Promise.all(
       rawEntries.map(async (entry) => {
         const sector = await db.workSectors.get(entry.sectorId);
+        const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
         const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
         const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
         const tags = tagResults.filter(Boolean) as Tag[];
@@ -83,6 +92,7 @@ export function HistoryPage() {
         return {
           ...entry,
           sector,
+          subTask,
           tags,
         };
       }),
@@ -90,6 +100,7 @@ export function HistoryPage() {
 
     setEntries(enrichedEntries);
     setAvailableSectors(usableSectors);
+    setAvailableSubTasks(usableSubTasks);
     setAvailableTags(usableTags);
 
     if (!selectedSectorId && usableSectors.length > 0) {
@@ -102,6 +113,37 @@ export function HistoryPage() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => {
+    if (isPause) {
+      setSelectedSubTaskId("");
+      return;
+    }
+
+    if (!selectedSectorId) {
+      setSelectedSubTaskId("");
+      return;
+    }
+
+    const matchingSubTasks = availableSubTasks.filter(
+      (subTask) => subTask.sectorId === selectedSectorId,
+    );
+
+    if (matchingSubTasks.length === 0) {
+      setSelectedSubTaskId("");
+      return;
+    }
+
+    const stillValid = matchingSubTasks.some((subTask) => subTask.id === selectedSubTaskId);
+    if (!stillValid) {
+      setSelectedSubTaskId("");
+    }
+  }, [isPause, selectedSectorId, selectedSubTaskId, availableSubTasks]);
+
+  const filteredSubTasks = useMemo(() => {
+    if (!selectedSectorId) return [];
+    return availableSubTasks.filter((subTask) => subTask.sectorId === selectedSectorId);
+  }, [availableSubTasks, selectedSectorId]);
 
   const sortedEntries = useMemo(() => {
     const copied = [...entries];
@@ -120,6 +162,7 @@ export function HistoryPage() {
   function resetForm() {
     setEditingEntryId(null);
     setEntryDate(new Date().toISOString().slice(0, 10));
+    setSelectedSubTaskId("");
     setStartTime("09:00");
     setEndTime("10:00");
     setNote("");
@@ -142,6 +185,7 @@ export function HistoryPage() {
     setEndTime(isoToTimeInput(entry.endAt));
     setIsPause(entry.isPause);
     setSelectedSectorId(entry.isPause ? "" : entry.sectorId);
+    setSelectedSubTaskId(entry.isPause ? "" : entry.subTaskId ?? "");
     setNote(entry.notes ?? "");
     setSelectedTagNames(entry.tags?.map((tag) => tag.name) ?? []);
     setNewTagInput("");
@@ -207,6 +251,7 @@ export function HistoryPage() {
         endAt,
         durationSeconds,
         sectorId: effectiveSectorId,
+        subTaskId: isPause ? undefined : selectedSubTaskId || undefined,
         energy: isPause ? undefined : existingEntry.energy ?? "bon",
         notes: note.trim() || undefined,
         isPause,
@@ -287,6 +332,24 @@ export function HistoryPage() {
                 ))}
               </select>
             </div>
+            <div>
+              <label className="mb-2 block text-sm font-medium text-neutral-700">
+                Sous-tâche
+              </label>
+              <select
+                value={selectedSubTaskId}
+                onChange={(e) => setSelectedSubTaskId(e.target.value)}
+                disabled={isPause}
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+              >
+                <option value="">Aucune</option>
+                {filteredSubTasks.map((subTask) => (
+                  <option key={subTask.id} value={subTask.id}>
+                    {subTask.name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <div>
               <label className="mb-2 block text-sm font-medium text-neutral-700">
@@ -344,11 +407,10 @@ export function HistoryPage() {
                               : [...prev, tag.name],
                           )
                         }
-                        className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                          isSelected
+                        className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
                             ? "bg-neutral-900 text-white"
                             : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-                        }`}
+                          }`}
                       >
                         {tag.name}
                       </button>
@@ -456,11 +518,10 @@ export function HistoryPage() {
                 return (
                   <div
                     key={entry.id}
-                    className={`rounded-2xl p-4 ring-1 ${
-                      isPauseEntry
+                    className={`rounded-2xl p-4 ring-1 ${isPauseEntry
                         ? "bg-amber-50 ring-amber-200"
                         : "bg-neutral-50 ring-neutral-200"
-                    }`}
+                      }`}
                   >
                     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
@@ -490,6 +551,12 @@ export function HistoryPage() {
                           })}
                         </p>
 
+                        {entry.subTask ? (
+                          <p className="mt-3 text-sm text-neutral-600">
+                            Sous-tâche : {entry.subTask.name}
+                          </p>
+                        ) : null}
+
                         {entry.notes ? (
                           <p className="mt-3 text-sm text-neutral-700">{entry.notes}</p>
                         ) : null}
@@ -514,9 +581,8 @@ export function HistoryPage() {
                             {formatDurationFromSeconds(entry.durationSeconds)}
                           </p>
                           <p
-                            className={`mt-1 text-sm font-medium ${
-                              isPauseEntry ? "text-amber-700" : "text-neutral-500"
-                            }`}
+                            className={`mt-1 text-sm font-medium ${isPauseEntry ? "text-amber-700" : "text-neutral-500"
+                              }`}
                           >
                             {isPauseEntry ? "Pause" : "Travail"}
                           </p>

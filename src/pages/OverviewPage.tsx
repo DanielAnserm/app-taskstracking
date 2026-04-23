@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { db } from "../db/database";
-import type { Tag, TimeEntry, WorkSector } from "../types/domain";
+import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
+  subTask?: SubTask;
   tags?: Tag[];
 }
 
@@ -28,6 +29,12 @@ interface SectorBucket {
 interface TagBucket {
   tagId: string;
   tagName: string;
+  activeSeconds: number;
+}
+
+interface SubTaskBucket {
+  subTaskId: string;
+  subTaskName: string;
   activeSeconds: number;
 }
 
@@ -99,6 +106,7 @@ export function OverviewPage() {
       const enrichedEntries = await Promise.all(
         rawEntries.map(async (entry) => {
           const sector = await db.workSectors.get(entry.sectorId);
+          const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
           const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
           const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
           const tags = tagResults.filter(Boolean) as Tag[];
@@ -106,6 +114,7 @@ export function OverviewPage() {
           return {
             ...entry,
             sector,
+            subTask,
             tags,
           };
         }),
@@ -188,6 +197,27 @@ export function OverviewPage() {
     return Array.from(map.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
   }, [activeEntries]);
 
+  const subTaskBuckets = useMemo<SubTaskBucket[]>(() => {
+    const map = new Map<string, SubTaskBucket>();
+
+    for (const entry of activeEntries) {
+      if (!entry.subTaskId) continue;
+
+      const existing = map.get(entry.subTaskId);
+
+      if (existing) {
+        existing.activeSeconds += entry.durationSeconds;
+      } else {
+        map.set(entry.subTaskId, {
+          subTaskId: entry.subTaskId,
+          subTaskName: entry.subTask?.name ?? entry.subTaskId,
+          activeSeconds: entry.durationSeconds,
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
+  }, [activeEntries]);
   const tagBuckets = useMemo<TagBucket[]>(() => {
     const map = new Map<string, TagBucket>();
 
@@ -337,33 +367,30 @@ export function OverviewPage() {
             <button
               type="button"
               onClick={() => setRange("7d")}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                range === "7d"
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${range === "7d"
                   ? "bg-neutral-900 text-white"
                   : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-              }`}
+                }`}
             >
               7 jours
             </button>
             <button
               type="button"
               onClick={() => setRange("30d")}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                range === "30d"
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${range === "30d"
                   ? "bg-neutral-900 text-white"
                   : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-              }`}
+                }`}
             >
               30 jours
             </button>
             <button
               type="button"
               onClick={() => setRange("90d")}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${
-                range === "90d"
+              className={`rounded-full px-4 py-2 text-sm font-medium transition ${range === "90d"
                   ? "bg-neutral-900 text-white"
                   : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-              }`}
+                }`}
             >
               90 jours
             </button>
@@ -553,7 +580,7 @@ export function OverviewPage() {
               </div>
             </section>
 
-            <section className="grid gap-4 xl:grid-cols-3">
+            <section className="grid gap-4 xl:grid-cols-4">
               <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
                 <h2 className="text-xl font-semibold text-neutral-900">
                   Répartition par jour de la semaine
@@ -618,6 +645,36 @@ export function OverviewPage() {
                 )}
               </div>
 
+              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
+                <h2 className="text-xl font-semibold text-neutral-900">Top sous-tâches</h2>
+
+                {subTaskBuckets.length === 0 ? (
+                  <p className="mt-4 text-sm text-neutral-600">
+                    Aucune sous-tâche associée aux entrées de travail sur cette période.
+                  </p>
+                ) : (
+                  <div className="mt-5 space-y-3">
+                    {subTaskBuckets.map((subTask, index) => (
+                      <div
+                        key={subTask.subTaskId}
+                        className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
+                              #{index + 1}
+                            </span>
+                            <p className="font-semibold text-neutral-900">{subTask.subTaskName}</p>
+                          </div>
+                          <p className="font-semibold text-neutral-900">
+                            {formatDurationFromSeconds(subTask.activeSeconds)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
                 <h2 className="text-xl font-semibold text-neutral-900">Top tags</h2>
 

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { sectorRepository } from "../repositories/sectorRepository";
+import { subTaskRepository } from "../repositories/subTaskRepository";
 import { tagRepository } from "../repositories/tagRepository";
-import type { Tag, WorkSector } from "../types/domain";
+import type { SubTask, Tag, WorkSector } from "../types/domain";
 
 interface DraftSector {
   name: string;
@@ -12,12 +13,17 @@ interface DraftSector {
 interface DraftTag {
   name: string;
 }
+interface DraftSubTask {
+  sectorId: string;
+  name: string;
+}
 
 export function SettingsPage() {
   const [sectors, setSectors] = useState<WorkSector[]>([]);
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+const [subTasks, setSubTasks] = useState<SubTask[]>([]);
+const [tags, setTags] = useState<Tag[]>([]);
+const [loading, setLoading] = useState(true);
+const [saving, setSaving] = useState(false);
 
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
@@ -28,15 +34,30 @@ export function SettingsPage() {
     name: "",
   });
 
+  const [draftSubTask, setDraftSubTask] = useState<DraftSubTask>({
+  sectorId: "",
+  name: "",
+});
+
   async function loadData() {
-    const [allSectors, allTags] = await Promise.all([
-      sectorRepository.listAll(),
-      tagRepository.listAll(),
-    ]);
+    const [allSectors, allSubTasks, allTags] = await Promise.all([
+  sectorRepository.listAll(),
+  subTaskRepository.listAll(),
+  tagRepository.listAll(),
+]);
 
     setSectors(allSectors);
-    setTags(allTags);
-    setLoading(false);
+setSubTasks(allSubTasks);
+setTags(allTags);
+
+if (!draftSubTask.sectorId && allSectors.length > 0) {
+  const firstUsableSector = allSectors.find((sector) => sector.id !== "pause");
+  if (firstUsableSector) {
+    setDraftSubTask((prev) => ({ ...prev, sectorId: firstUsableSector.id }));
+  }
+}
+
+setLoading(false);
   }
 
   useEffect(() => {
@@ -136,6 +157,76 @@ export function SettingsPage() {
     }
   }
 
+    async function handleCreateSubTask() {
+    const trimmedName = draftSubTask.name.trim();
+    if (!trimmedName || !draftSubTask.sectorId) return;
+
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+
+      const sameSectorSubTasks = subTasks.filter(
+        (subTask) => subTask.sectorId === draftSubTask.sectorId,
+      );
+
+      const nextDisplayOrder =
+        sameSectorSubTasks.length > 0
+          ? Math.max(...sameSectorSubTasks.map((subTask) => subTask.displayOrder)) + 1
+          : 1;
+
+      const newSubTask: SubTask = {
+        id: crypto.randomUUID(),
+        sectorId: draftSubTask.sectorId,
+        name: trimmedName,
+        defaultActionType: undefined,
+        displayOrder: nextDisplayOrder,
+        isActive: true,
+        isArchived: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      await subTaskRepository.create(newSubTask);
+
+      setDraftSubTask((prev) => ({
+        ...prev,
+        name: "",
+      }));
+
+      await loadData();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUpdateSubTask(
+    subTask: SubTask,
+    updates: Partial<Pick<SubTask, "name" | "sectorId">>,
+  ) {
+    const updatedSubTask: SubTask = {
+      ...subTask,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await subTaskRepository.update(updatedSubTask);
+    await loadData();
+  }
+
+  async function handleToggleActiveSubTask(subTask: SubTask) {
+    await subTaskRepository.setActive(subTask.id, !subTask.isActive);
+    await loadData();
+  }
+
+  async function handleToggleArchivedSubTask(subTask: SubTask) {
+    if (subTask.isArchived) {
+      await subTaskRepository.unarchive(subTask.id);
+    } else {
+      await subTaskRepository.archive(subTask.id);
+    }
+    await loadData();
+  }
+
   async function handleUpdateTag(tag: Tag, name: string) {
     const trimmedName = name.trim();
     if (!trimmedName) return;
@@ -178,9 +269,56 @@ export function SettingsPage() {
             Paramètres
           </h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Gestion simple des secteurs et des tags.
+            Gestion simple des secteurs, des sous-tâches et des tags.
           </p>
         </div>
+                <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <h2 className="text-xl font-semibold text-neutral-900">Créer une sous-tâche</h2>
+          <div className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-neutral-700">
+                Secteur
+              </label>
+              <select
+                value={draftSubTask.sectorId}
+                onChange={(e) =>
+                  setDraftSubTask((prev) => ({ ...prev, sectorId: e.target.value }))
+                }
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+              >
+                {sectors
+                  .filter((sector) => sector.id !== "pause")
+                  .map((sector) => (
+                    <option key={sector.id} value={sector.id}>
+                      {sector.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
+              <input
+                type="text"
+                value={draftSubTask.name}
+                onChange={(e) =>
+                  setDraftSubTask((prev) => ({ ...prev, name: e.target.value }))
+                }
+                placeholder="Ex. appels entrants, emails, classement"
+                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleCreateSubTask}
+              disabled={saving || !draftSubTask.name.trim() || !draftSubTask.sectorId}
+              className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+            >
+              Ajouter
+            </button>
+          </div>
+        </section>
 
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <h2 className="text-xl font-semibold text-neutral-900">Créer un secteur</h2>
@@ -325,6 +463,114 @@ export function SettingsPage() {
                           </span>
                         )}
                       </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+                  <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div className="flex items-center justify-between gap-4">
+            <h2 className="text-xl font-semibold text-neutral-900">Sous-tâches existantes</h2>
+            {!loading && (
+              <span className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600">
+                {subTasks.length} sous-tâche{subTasks.length > 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+
+          {loading ? (
+            <p className="mt-4 text-sm text-neutral-600">Chargement…</p>
+          ) : (
+            <div className="mt-5 space-y-4">
+              {subTasks.map((subTask) => {
+                const parentSector = sectors.find((sector) => sector.id === subTask.sectorId);
+
+                return (
+                  <div
+                    key={subTask.id}
+                    className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
+                  >
+                    <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-start">
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-neutral-700">
+                          Nom
+                        </label>
+                        <input
+                          type="text"
+                          value={subTask.name}
+                          onChange={(e) => void handleUpdateSubTask(subTask, { name: e.target.value })}
+                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-2 block text-sm font-medium text-neutral-700">
+                          Secteur
+                        </label>
+                        <select
+                          value={subTask.sectorId}
+                          onChange={(e) =>
+                            void handleUpdateSubTask(subTask, { sectorId: e.target.value })
+                          }
+                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                        >
+                          {sectors
+                            .filter((sector) => sector.id !== "pause")
+                            .map((sector) => (
+                              <option key={sector.id} value={sector.id}>
+                                {sector.name}
+                              </option>
+                            ))}
+                        </select>
+
+                        {parentSector ? (
+                          <p className="mt-2 text-xs text-neutral-500">
+                            Secteur actuel : {parentSector.name}
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleActiveSubTask(subTask)}
+                          className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                        >
+                          {subTask.isActive ? "Désactiver" : "Activer"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleArchivedSubTask(subTask)}
+                          className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                        >
+                          {subTask.isArchived ? "Désarchiver" : "Archiver"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-medium ${
+                          subTask.isActive
+                            ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                            : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
+                        }`}
+                      >
+                        {subTask.isActive ? "Actif" : "Inactif"}
+                      </span>
+
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-medium ${
+                          subTask.isArchived
+                            ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                            : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
+                        }`}
+                      >
+                        {subTask.isArchived ? "Archivé" : "Visible"}
+                      </span>
                     </div>
                   </div>
                 );
