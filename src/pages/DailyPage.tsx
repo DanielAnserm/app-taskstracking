@@ -62,11 +62,11 @@ type SortOrder = "asc" | "desc";
 
 export function DailyPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
-const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
-const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
-const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
-const [availableTags, setAvailableTags] = useState<Tag[]>([]);
-const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+  const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
+  const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [allTags, setAllTags] = useState<Tag[]>([]);
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [pauseSeconds, setPauseSeconds] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -126,12 +126,12 @@ const [allTags, setAllTags] = useState<Tag[]>([]);
       }),
     );
 
-setEntries(enrichedEntries);
-setAvailableSectors(usableSectors);
-setAvailableSubTasks(usableSubTasks);
-setAllSubTasks(allSubTasks);
-setAvailableTags(usableTags);
-setAllTags(allTags);
+    setEntries(enrichedEntries);
+    setAvailableSectors(usableSectors);
+    setAvailableSubTasks(usableSubTasks);
+    setAllSubTasks(allSubTasks);
+    setAvailableTags(usableTags);
+    setAllTags(allTags);
     setActiveSeconds(totals.activeSeconds);
     setPauseSeconds(totals.pauseSeconds);
 
@@ -275,60 +275,60 @@ setAllTags(allTags);
     const effectiveSectorId = isPause ? "pause" : selectedSectorId;
     const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
 
-const typedTagNames = parseTagInput(newTagInput);
+    const typedTagNames = parseTagInput(newTagInput);
 
-const tagsValidation = validateSelectedTags({
-  selectedTagNames,
-  typedTagNames,
-  availableTags,
-  allTags,
-});
+    const tagsValidation = validateSelectedTags({
+      selectedTagNames,
+      typedTagNames,
+      availableTags,
+      allTags,
+    });
 
-if (!tagsValidation.isValid) {
-  setErrorMessage(tagsValidation.error ?? "Tags invalides.");
-  return;
-}
+    if (!tagsValidation.isValid) {
+      setErrorMessage(tagsValidation.error ?? "Tags invalides.");
+      return;
+    }
 
-const typedSubTaskValidation = validateTypedSubTaskName({
-  sectorId: effectiveSectorId,
-  typedSubTaskName: newSubTaskName,
-  allSubTasks,
-  isPause,
-});
+    const typedSubTaskValidation = validateTypedSubTaskName({
+      sectorId: effectiveSectorId,
+      typedSubTaskName: newSubTaskName,
+      allSubTasks,
+      isPause,
+    });
 
-if (!typedSubTaskValidation.isValid) {
-  setErrorMessage(typedSubTaskValidation.error ?? "Sous-tâche invalide.");
-  return;
-}
+    if (!typedSubTaskValidation.isValid) {
+      setErrorMessage(typedSubTaskValidation.error ?? "Sous-tâche invalide.");
+      return;
+    }
 
-const actionsValidation = validateActionDrafts(actionDrafts);
+    const actionsValidation = validateActionDrafts(actionDrafts);
 
-if (!actionsValidation.isValid) {
-  setErrorMessage(actionsValidation.error ?? "Actions invalides.");
-  return;
-}
+    if (!actionsValidation.isValid) {
+      setErrorMessage(actionsValidation.error ?? "Actions invalides.");
+      return;
+    }
 
-const actionsPayload = actionDrafts
-  .map((action) => ({
-    actionType: action.actionType.trim(),
-    quantity: Number(action.quantity),
-  }))
-  .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
+    const actionsPayload = actionDrafts
+      .map((action) => ({
+        actionType: action.actionType.trim(),
+        quantity: Number(action.quantity),
+      }))
+      .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
     if (!effectiveSectorId) {
-  setErrorMessage("Choisis un secteur.");
-  return;
-}
+      setErrorMessage("Choisis un secteur.");
+      return;
+    }
 
-const sectorValidation = validateSelectedSector({
-  sectorId: effectiveSectorId,
-  availableSectors,
-  isPause,
-});
+    const sectorValidation = validateSelectedSector({
+      sectorId: effectiveSectorId,
+      availableSectors,
+      isPause,
+    });
 
-if (!sectorValidation.isValid) {
-  setErrorMessage(sectorValidation.error ?? "Secteur invalide.");
-  return;
-}
+    if (!sectorValidation.isValid) {
+      setErrorMessage(sectorValidation.error ?? "Secteur invalide.");
+      return;
+    }
 
     let resolvedSubTaskId: string | undefined = isPause ? undefined : selectedSubTaskId || undefined;
 
@@ -340,19 +340,19 @@ if (!sectorValidation.isValid) {
       resolvedSubTaskId = createdSubTask.id;
     }
 
-if (resolvedSubTaskId) {
-  const subTaskConsistency = validateSectorSubTaskConsistency({
-    sectorId: effectiveSectorId,
-    subTaskId: resolvedSubTaskId,
-    availableSubTasks,
-    isPause,
-  });
+    if (resolvedSubTaskId) {
+      const subTaskConsistency = validateSectorSubTaskConsistency({
+        sectorId: effectiveSectorId,
+        subTaskId: resolvedSubTaskId,
+        availableSubTasks,
+        isPause,
+      });
 
-  if (!subTaskConsistency.isValid) {
-    setErrorMessage(subTaskConsistency.error ?? "Sous-tâche invalide.");
-    return;
-  }
-}
+      if (!subTaskConsistency.isValid) {
+        setErrorMessage(subTaskConsistency.error ?? "Sous-tâche invalide.");
+        return;
+      }
+    }
 
     const startAt = toIsoForToday(startTime);
     const endAt = toIsoForToday(endTime);
