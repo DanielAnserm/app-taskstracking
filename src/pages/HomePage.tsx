@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { timeEntryRepository } from "../repositories/timeEntryRepository";
 import { sessionService } from "../domain/timeTracking/sessionService";
@@ -13,6 +14,14 @@ import {
   validateSelectedTags,
   validateTypedSubTaskName,
 } from "../utils/validation";
+
+interface SectorChartSlice {
+  sectorId: string;
+  name: string;
+  seconds: number;
+  color: string;
+  percentage: number;
+}
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10);
@@ -82,12 +91,12 @@ export function HomePage() {
   const [draftNote, setDraftNote] = useState("");
   const [selectedTagNames, setSelectedTagNames] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState("");
-
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [pauseSeconds, setPauseSeconds] = useState(0);
   const [entryCount, setEntryCount] = useState(0);
   const [topSectorName, setTopSectorName] = useState("—");
   const [topSectorSeconds, setTopSectorSeconds] = useState(0);
+  const [sectorChartData, setSectorChartData] = useState<SectorChartSlice[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [clockMs, setClockMs] = useState(Date.now());
@@ -113,7 +122,7 @@ export function HomePage() {
   const [switchErrorMessage, setSwitchErrorMessage] = useState("");
 
   async function loadData() {
-        const session = await sessionService.getCurrent();
+    const session = await sessionService.getCurrent();
     const today = todayDateString();
     const totals = await aggregationService.getDailyTotals(today);
     const dailyEntries = await timeEntryRepository.listByDate(today);
@@ -147,7 +156,7 @@ export function HomePage() {
     setAvailableTags(usableTags);
     setAllTags(allTagsFromDb);
 
-      setActiveSeconds(totals.activeSeconds);
+    setActiveSeconds(totals.activeSeconds);
     setPauseSeconds(totals.pauseSeconds);
     setEntryCount(totals.entryCount);
 
@@ -173,6 +182,35 @@ export function HomePage() {
       setTopSectorName(matchingSector?.name ?? topSectorId);
       setTopSectorSeconds(seconds);
     }
+    const allSectorBuckets = new Map<string, number>();
+
+    for (const entry of dailyEntries) {
+      const current = allSectorBuckets.get(entry.sectorId) ?? 0;
+      allSectorBuckets.set(entry.sectorId, current + entry.durationSeconds);
+    }
+
+    const totalDaySeconds = totals.activeSeconds + totals.pauseSeconds;
+
+    if (allSectorBuckets.size === 0 || totalDaySeconds === 0) {
+      setSectorChartData([]);
+    } else {
+      const chartData = Array.from(allSectorBuckets.entries())
+        .map(([sectorId, seconds]) => {
+          const matchingSector = allSectors.find((sector) => sector.id === sectorId);
+
+          return {
+            sectorId,
+            name: matchingSector?.name ?? sectorId,
+            seconds,
+            color: matchingSector?.color ?? "#737373",
+            percentage: Math.round((seconds / totalDaySeconds) * 1000) / 10,
+          };
+        })
+        .sort((a, b) => b.seconds - a.seconds);
+
+      setSectorChartData(chartData);
+    }
+
     if (!selectedSectorId && usableSectors.length > 0) {
       setSelectedSectorId(usableSectors[0].id);
     }
@@ -276,6 +314,8 @@ export function HomePage() {
     if (!currentSession) return 0;
     return computeElapsedSeconds(currentSession, clockMs);
   }, [currentSession, clockMs]);
+
+  const totalDaySeconds = activeSeconds + pauseSeconds;
 
   const isPauseSession = currentSession?.sectorId === "pause";
   const currentSubTask = currentSession?.subTaskId
@@ -676,7 +716,7 @@ export function HomePage() {
     }
   }
 
-    async function handleQuickStartTask(sectorId: string) {
+  async function handleQuickStartTask(sectorId: string) {
     setErrorMessage("");
 
     const sectorValidation = validateSelectedSector({
@@ -750,7 +790,7 @@ export function HomePage() {
           </div>
         </header>
 
-                <section className="rounded-[2rem] bg-white p-5 shadow-sm ring-1 ring-black/5 lg:p-6">
+        <section className="rounded-[2rem] bg-white p-5 shadow-sm ring-1 ring-black/5 lg:p-6">
           <div className="flex flex-col gap-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
@@ -761,13 +801,12 @@ export function HomePage() {
 
                   {currentSession ? (
                     <span
-                      className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${
-                        isPauseSession
+                      className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${isPauseSession
                           ? "bg-amber-50 text-amber-700 ring-amber-200"
                           : currentSession.status === "running"
                             ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
                             : "bg-amber-50 text-amber-700 ring-amber-200"
-                      }`}
+                        }`}
                     >
                       {isPauseSession
                         ? "Pause"
@@ -1024,7 +1063,7 @@ export function HomePage() {
                   </div>
                 </div>
               </div>
-                        ) : (
+            ) : (
               <div className="space-y-5">
                 <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
                   <div className="rounded-3xl bg-neutral-50 p-5 ring-1 ring-neutral-200">
@@ -1113,11 +1152,10 @@ export function HomePage() {
                                           : [...prev, tag.name],
                                       )
                                     }
-                                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                                      isSelected
+                                    className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
                                         ? "bg-neutral-900 text-white"
                                         : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-                                    }`}
+                                      }`}
                                   >
                                     {tag.name}
                                   </button>
@@ -1162,7 +1200,7 @@ export function HomePage() {
                   <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
                     <p className="text-sm font-medium text-neutral-500">Lancer</p>
 
-                                      <div className="mt-4 flex h-full min-h-[220px] flex-col justify-center gap-3">
+                    <div className="mt-4 flex h-full min-h-[220px] flex-col justify-center gap-3">
                       <button
                         type="button"
                         onClick={handleStartTask}
@@ -1234,37 +1272,115 @@ export function HomePage() {
           </div>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Temps actif</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {formatDurationFromSeconds(activeSeconds)}
-            </p>
+        <section className="space-y-5">
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+              <p className="text-sm font-medium text-neutral-500">Temps actif</p>
+              <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
+                {formatDurationFromSeconds(activeSeconds)}
+              </p>
+            </div>
+
+            <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+              <p className="text-sm font-medium text-neutral-500">Temps de pause</p>
+              <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
+                {formatDurationFromSeconds(pauseSeconds)}
+              </p>
+            </div>
+
+            <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+              <p className="text-sm font-medium text-neutral-500">Entrées du jour</p>
+              <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
+                {entryCount}
+              </p>
+            </div>
+
+            <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
+              <p className="text-sm font-medium text-neutral-500">Secteur principal</p>
+              <p className="mt-2 text-xl font-semibold tracking-tight text-neutral-900">
+                {topSectorName}
+              </p>
+              <p className="mt-2 text-sm text-neutral-500">
+                {topSectorSeconds > 0
+                  ? formatDurationFromSeconds(topSectorSeconds)
+                  : "Aucun temps actif"}
+              </p>
+            </div>
           </div>
 
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Temps de pause</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {formatDurationFromSeconds(pauseSeconds)}
-            </p>
-          </div>
+          <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+            <div>
+              <h3 className="text-2xl font-semibold tracking-tight text-neutral-900">
+                Répartition de la journée
+              </h3>
+              <p className="text-sm text-neutral-600">
+                Temps total par tâche, pauses incluses.
+              </p>
+            </div>
 
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Entrées du jour</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {entryCount}
-            </p>
-          </div>
+            {sectorChartData.length === 0 ? (
+              <p className="mt-5 text-sm text-neutral-600">
+                Aucune donnée à afficher pour aujourd’hui.
+              </p>
+            ) : (
+              <div className="mt-6 grid gap-8 xl:grid-cols-[0.95fr_1.05fr] xl:items-center">
+                <div className="mx-auto h-[340px] w-full max-w-[340px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={sectorChartData}
+                        dataKey="seconds"
+                        nameKey="name"
+                        innerRadius={88}
+                        outerRadius={128}
+                        paddingAngle={2}
+                        stroke="none"
+                      >
+                        {sectorChartData.map((entry) => (
+                          <Cell key={entry.sectorId} fill={entry.color} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
 
-                    <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Secteur principal</p>
-            <p className="mt-2 text-xl font-semibold tracking-tight text-neutral-900">
-              {topSectorName}
-            </p>
-            <p className="mt-2 text-sm text-neutral-500">
-              {topSectorSeconds > 0 ? formatDurationFromSeconds(topSectorSeconds) : "Aucun temps actif"}
-            </p>
-          </div>
+                  <div className="pointer-events-none -mt-[205px] flex flex-col items-center justify-center text-center">
+                    <p className="text-xs font-medium uppercase tracking-[0.18em] text-neutral-500">
+                      Total jour
+                    </p>
+                    <p className="mt-2 text-2xl font-bold tracking-tight text-neutral-900">
+                      {formatDurationFromSeconds(totalDaySeconds)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {sectorChartData.map((item) => (
+                    <div
+                      key={item.sectorId}
+                      className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
+                    >
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="h-3.5 w-3.5 rounded-full"
+                            style={{ backgroundColor: item.color }}
+                          />
+                          <p className="font-semibold text-neutral-900">{item.name}</p>
+                        </div>
+
+                        <div className="text-right">
+                          <p className="font-semibold text-neutral-900">
+                            {formatDurationFromSeconds(item.seconds)}
+                          </p>
+                          <p className="text-sm text-neutral-500">{item.percentage} %</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
         </section>
 
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
@@ -1412,11 +1528,10 @@ export function HomePage() {
                                     : [...prev, tag.name],
                                 )
                               }
-                              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                                isSelected
+                              className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
                                   ? "bg-neutral-900 text-white"
                                   : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-                              }`}
+                                }`}
                             >
                               {tag.name}
                             </button>
@@ -1570,11 +1685,10 @@ export function HomePage() {
                                     : [...prev, tag.name],
                                 )
                               }
-                              className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                                isSelected
+                              className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
                                   ? "bg-neutral-900 text-white"
                                   : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-                              }`}
+                                }`}
                             >
                               {tag.name}
                             </button>
