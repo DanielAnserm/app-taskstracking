@@ -300,6 +300,10 @@ export function HomePage() {
     return availableSubTasks.filter((subTask) => subTask.sectorId === selectedSectorId);
   }, [availableSubTasks, selectedSectorId]);
 
+  const sectorsForDropdown = useMemo(() => {
+    return [...availableSectors].sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  }, [availableSectors]);
+
   const filteredEditSubTasks = useMemo(() => {
     if (!editSectorId) return [];
     return availableSubTasks.filter((subTask) => subTask.sectorId === editSectorId);
@@ -802,10 +806,10 @@ export function HomePage() {
                   {currentSession ? (
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${isPauseSession
-                          ? "bg-amber-50 text-amber-700 ring-amber-200"
-                          : currentSession.status === "running"
-                            ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                            : "bg-amber-50 text-amber-700 ring-amber-200"
+                        ? "bg-amber-50 text-amber-700 ring-amber-200"
+                        : currentSession.status === "running"
+                          ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                          : "bg-amber-50 text-amber-700 ring-amber-200"
                         }`}
                     >
                       {isPauseSession
@@ -824,7 +828,7 @@ export function HomePage() {
                 <p className="mt-2 text-sm text-neutral-600">
                   {currentSession
                     ? "Garde le contrôle sur ce qui tourne maintenant."
-                    : "Prépare le contexte puis démarre ta prochaine tâche."}
+                    : ""}
                 </p>
               </div>
 
@@ -844,7 +848,7 @@ export function HomePage() {
               <p className="text-sm text-neutral-600">Chargement…</p>
             ) : currentSession ? (
               <div className="grid gap-6 xl:grid-cols-[1.35fr_0.85fr]">
-                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                <div className="rounded-3xl bg-neutral-50 p-3.5 ring-1 ring-neutral-200">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium text-neutral-500">Tâche</p>
@@ -1067,7 +1071,7 @@ export function HomePage() {
               <div className="space-y-5">
                 <div className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]">
                   <div className="rounded-3xl bg-neutral-50 p-5 ring-1 ring-neutral-200">
-                    <div className="grid gap-4">
+                    <div className="grid gap-3.5">
                       <div>
                         <label
                           htmlFor="task"
@@ -1079,9 +1083,9 @@ export function HomePage() {
                           id="task"
                           value={selectedSectorId}
                           onChange={(e) => setSelectedSectorId(e.target.value)}
-                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-4 text-base text-neutral-900 outline-none"
+                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3.5 text-base text-neutral-900 outline-none"
                         >
-                          {availableSectors.map((sector) => (
+                          {sectorsForDropdown.map((sector) => (
                             <option key={sector.id} value={sector.id}>
                               {sector.name}
                             </option>
@@ -1089,7 +1093,7 @@ export function HomePage() {
                         </select>
                       </div>
 
-                      <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-3 md:grid-cols-2">
                         <div>
                           <label
                             htmlFor="subtask-existing"
@@ -1101,7 +1105,7 @@ export function HomePage() {
                             id="subtask-existing"
                             value={selectedSubTaskId}
                             onChange={(e) => setSelectedSubTaskId(e.target.value)}
-                            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-900 outline-none"
                           >
                             <option value="">Aucune</option>
                             {filteredSubTasks.map((subTask) => (
@@ -1125,7 +1129,7 @@ export function HomePage() {
                             value={newSubTaskName}
                             onChange={(e) => setNewSubTaskName(e.target.value)}
                             placeholder="Ex. relance client, tri des mails..."
-                            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-900 outline-none"
                           />
                         </div>
                       </div>
@@ -1153,8 +1157,8 @@ export function HomePage() {
                                       )
                                     }
                                     className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
-                                        ? "bg-neutral-900 text-white"
-                                        : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                                      ? "bg-neutral-900 text-white"
+                                      : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
                                       }`}
                                   >
                                     {tag.name}
@@ -1173,7 +1177,7 @@ export function HomePage() {
                           />
                         </div>
 
-                        <div>
+                        <div className="pt-[1.9rem]">
                           <label
                             htmlFor="note"
                             className="mb-2 block text-sm font-medium text-neutral-700"
@@ -1186,7 +1190,7 @@ export function HomePage() {
                             value={draftNote}
                             onChange={(e) => setDraftNote(e.target.value)}
                             placeholder="Ex. classement, suivi, appels..."
-                            className="mt-[2.3rem] w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                            className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
                           />
                         </div>
                       </div>
@@ -1197,10 +1201,8 @@ export function HomePage() {
                     </div>
                   </div>
 
-                  <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
-                    <p className="text-sm font-medium text-neutral-500">Lancer</p>
-
-                    <div className="mt-4 flex h-full min-h-[220px] flex-col justify-center gap-3">
+                  <div className="rounded-3xl bg-neutral-50 p-3.5 ring-1 ring-neutral-200">
+                    <div className="flex h-full min-h-[210px] flex-col justify-center gap-4">
                       <button
                         type="button"
                         onClick={handleStartTask}
@@ -1227,9 +1229,7 @@ export function HomePage() {
                     <h3 className="text-2xl font-semibold tracking-tight text-neutral-900">
                       Démarrage rapide
                     </h3>
-                    <p className="text-sm text-neutral-600">
-                      Lancer une tâche fréquente en un geste.
-                    </p>
+
                   </div>
 
                   <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -1323,7 +1323,7 @@ export function HomePage() {
                 Aucune donnée à afficher pour aujourd’hui.
               </p>
             ) : (
-              <div className="mt-6 grid gap-8 xl:grid-cols-[0.95fr_1.05fr] xl:items-center">
+              <div className="mt-6 grid gap-5 xl:grid-cols-[1.1fr_0.9fr] xl:items-center">
                 <div className="mx-auto h-[340px] w-full max-w-[340px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
@@ -1353,27 +1353,26 @@ export function HomePage() {
                   </div>
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-2.5">
                   {sectorChartData.map((item) => (
                     <div
                       key={item.sectorId}
-                      className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
+                      className="rounded-xl bg-neutral-50 px-3 py-2.5 ring-1 ring-neutral-200"
                     >
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3">
-                          <span
-                            className="h-3.5 w-3.5 rounded-full"
-                            style={{ backgroundColor: item.color }}
-                          />
-                          <p className="font-semibold text-neutral-900">{item.name}</p>
-                        </div>
-
-                        <div className="text-right">
-                          <p className="font-semibold text-neutral-900">
-                            {formatDurationFromSeconds(item.seconds)}
-                          </p>
-                          <p className="text-sm text-neutral-500">{item.percentage} %</p>
-                        </div>
+                      <div className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-3">
+                        <span
+                          className="h-3 w-3 rounded-full"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <p className="truncate text-sm font-medium text-neutral-900">
+                          {item.name}
+                        </p>
+                        <p className="text-sm font-semibold text-neutral-900">
+                          {formatDurationFromSeconds(item.seconds)}
+                        </p>
+                        <p className="text-xs text-neutral-500">
+                          {item.percentage} %
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -1473,7 +1472,7 @@ export function HomePage() {
                   </select>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="mb-2 block text-sm font-medium text-neutral-700">
                       Sous-tâche existante
@@ -1529,8 +1528,8 @@ export function HomePage() {
                                 )
                               }
                               className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
-                                  ? "bg-neutral-900 text-white"
-                                  : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                                ? "bg-neutral-900 text-white"
+                                : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
                                 }`}
                             >
                               {tag.name}
@@ -1686,8 +1685,8 @@ export function HomePage() {
                                 )
                               }
                               className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
-                                  ? "bg-neutral-900 text-white"
-                                  : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
+                                ? "bg-neutral-900 text-white"
+                                : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
                                 }`}
                             >
                               {tag.name}
