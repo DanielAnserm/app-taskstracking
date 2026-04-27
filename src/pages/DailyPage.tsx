@@ -14,6 +14,7 @@ import {
   validateSelectedSector,
   validateSelectedTags,
   validateTimeRange,
+  validateTypedSubTaskName,
 } from "../utils/validation";
 
 function todayDateString(): string {
@@ -61,8 +62,9 @@ type SortOrder = "asc" | "desc";
 
 export function DailyPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
-  const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
 const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
+const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
 const [availableTags, setAvailableTags] = useState<Tag[]>([]);
 const [allTags, setAllTags] = useState<Tag[]>([]);
   const [activeSeconds, setActiveSeconds] = useState(0);
@@ -127,6 +129,7 @@ const [allTags, setAllTags] = useState<Tag[]>([]);
 setEntries(enrichedEntries);
 setAvailableSectors(usableSectors);
 setAvailableSubTasks(usableSubTasks);
+setAllSubTasks(allSubTasks);
 setAvailableTags(usableTags);
 setAllTags(allTags);
     setActiveSeconds(totals.activeSeconds);
@@ -286,6 +289,18 @@ if (!tagsValidation.isValid) {
   return;
 }
 
+const typedSubTaskValidation = validateTypedSubTaskName({
+  sectorId: effectiveSectorId,
+  typedSubTaskName: newSubTaskName,
+  allSubTasks,
+  isPause,
+});
+
+if (!typedSubTaskValidation.isValid) {
+  setErrorMessage(typedSubTaskValidation.error ?? "Sous-tâche invalide.");
+  return;
+}
+
 const actionsValidation = validateActionDrafts(actionDrafts);
 
 if (!actionsValidation.isValid) {
@@ -325,17 +340,19 @@ if (!sectorValidation.isValid) {
       resolvedSubTaskId = createdSubTask.id;
     }
 
-    const subTaskConsistency = validateSectorSubTaskConsistency({
-      sectorId: effectiveSectorId,
-      subTaskId: resolvedSubTaskId,
-      availableSubTasks,
-      isPause,
-    });
+if (resolvedSubTaskId) {
+  const subTaskConsistency = validateSectorSubTaskConsistency({
+    sectorId: effectiveSectorId,
+    subTaskId: resolvedSubTaskId,
+    availableSubTasks,
+    isPause,
+  });
 
-    if (!subTaskConsistency.isValid) {
-      setErrorMessage(subTaskConsistency.error ?? "Sous-tâche invalide.");
-      return;
-    }
+  if (!subTaskConsistency.isValid) {
+    setErrorMessage(subTaskConsistency.error ?? "Sous-tâche invalide.");
+    return;
+  }
+}
 
     const startAt = toIsoForToday(startTime);
     const endAt = toIsoForToday(endTime);

@@ -215,3 +215,34 @@ export function validateActionDrafts(
 
   return { isValid: true };
 }
+
+export function validateTypedSubTaskName(params: {
+  sectorId: string;
+  typedSubTaskName?: string;
+  allSubTasks: SubTask[];
+  isPause: boolean;
+}): EntityValidationResult {
+  if (params.isPause) {
+    return { isValid: true };
+  }
+
+  const typedName = params.typedSubTaskName?.trim();
+  if (!typedName) {
+    return { isValid: true };
+  }
+
+  const existingSubTask = params.allSubTasks.find(
+    (subTask) =>
+      subTask.sectorId === params.sectorId &&
+      subTask.name.trim().toLowerCase() === typedName.toLowerCase(),
+  );
+
+  if (existingSubTask && (!existingSubTask.isActive || existingSubTask.isArchived)) {
+    return {
+      isValid: false,
+      error: `La sous-tâche "${typedName}" existe déjà mais n’est plus disponible.`,
+    };
+  }
+
+  return { isValid: true };
+}

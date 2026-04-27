@@ -12,6 +12,7 @@ import {
   validateSelectedSector,
   validateSelectedTags,
   validateTimeRange,
+  validateTypedSubTaskName,
 } from "../utils/validation";
 
 interface EntryWithSector extends TimeEntry {
@@ -59,8 +60,9 @@ function parseTagInput(input: string): string[] {
 
 export function HistoryPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
-  const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
 const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
+const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
 const [availableTags, setAvailableTags] = useState<Tag[]>([]);
 const [allTags, setAllTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
@@ -121,6 +123,7 @@ const [allTags, setAllTags] = useState<Tag[]>([]);
 setEntries(enrichedEntries);
 setAvailableSectors(usableSectors);
 setAvailableSubTasks(usableSubTasks);
+setAllSubTasks(allSubTasks);
 setAvailableTags(usableTags);
 setAllTags(allTags);
 
@@ -278,6 +281,18 @@ const tagsValidation = validateSelectedTags({
 
 if (!tagsValidation.isValid) {
   setErrorMessage(tagsValidation.error ?? "Tags invalides.");
+  return;
+}
+
+const typedSubTaskValidation = validateTypedSubTaskName({
+  sectorId: effectiveSectorId,
+  typedSubTaskName: newSubTaskName,
+  allSubTasks,
+  isPause,
+});
+
+if (!typedSubTaskValidation.isValid) {
+  setErrorMessage(typedSubTaskValidation.error ?? "Sous-tâche invalide.");
   return;
 }
 

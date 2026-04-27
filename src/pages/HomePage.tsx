@@ -10,6 +10,7 @@ import {
   validateSectorSubTaskConsistency,
   validateSelectedSector,
   validateSelectedTags,
+  validateTypedSubTaskName,
 } from "../utils/validation";
 
 function todayDateString(): string {
@@ -40,8 +41,9 @@ export function HomePage() {
   const [currentSession, setCurrentSession] = useState<ActiveSession | undefined>(undefined);
   const [currentSector, setCurrentSector] = useState<WorkSector | undefined>(undefined);
 
-  const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
-  const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
+const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
+const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
+const [allSubTasks, setAllSubTasks] = useState<SubTask[]>([]);
 const [availableTags, setAvailableTags] = useState<Tag[]>([]);
 const [allTags, setAllTags] = useState<Tag[]>([]);
 const [selectedSectorId, setSelectedSectorId] = useState("");
@@ -86,6 +88,7 @@ const [selectedSectorId, setSelectedSectorId] = useState("");
     setCurrentSector(sector);
 setAvailableSectors(usableSectors);
 setAvailableSubTasks(usableSubTasks);
+setAllSubTasks(allSubTasks);
 setAvailableTags(usableTags);
 setAllTags(allTags);
     setActiveSeconds(totals.activeSeconds);
@@ -203,6 +206,18 @@ const tagsValidation = validateSelectedTags({
 
 if (!tagsValidation.isValid) {
   setErrorMessage(tagsValidation.error ?? "Tags invalides.");
+  return;
+}
+
+const typedSubTaskValidation = validateTypedSubTaskName({
+  sectorId: selectedSectorId,
+  typedSubTaskName: newSubTaskName,
+  allSubTasks,
+  isPause: false,
+});
+
+if (!typedSubTaskValidation.isValid) {
+  setErrorMessage(typedSubTaskValidation.error ?? "Sous-tâche invalide.");
   return;
 }
 
