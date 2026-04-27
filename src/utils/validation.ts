@@ -1,4 +1,4 @@
-import type { SubTask, TimeEntry } from "../types/domain";
+import type { SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 
 export interface TimeRangeValidationResult {
   isValid: boolean;
@@ -8,6 +8,15 @@ export interface TimeRangeValidationResult {
 export interface OverlapValidationResult {
   hasOverlap: boolean;
   conflictingEntries: TimeEntry[];
+  error?: string;
+}
+export interface EntityValidationResult {
+  isValid: boolean;
+  error?: string;
+}
+
+export interface ActionDraftValidationResult {
+  isValid: boolean;
   error?: string;
 }
 
@@ -105,4 +114,104 @@ export function validateSectorSubTaskConsistency(params: {
   return {
     isValid: true,
   };
+}
+
+export function validateSelectedSector(params: {
+  sectorId: string;
+  availableSectors: WorkSector[];
+  isPause: boolean;
+}): EntityValidationResult {
+  if (params.isPause) {
+    return { isValid: true };
+  }
+
+  const matchingSector = params.availableSectors.find(
+    (sector) => sector.id === params.sectorId,
+  );
+
+  if (!matchingSector) {
+    return {
+      isValid: false,
+      error: "Le secteur sélectionné est introuvable.",
+    };
+  }
+
+  if (!matchingSector.isActive || matchingSector.isArchived) {
+    return {
+      isValid: false,
+      error: "Le secteur sélectionné n’est plus disponible.",
+    };
+  }
+
+  return { isValid: true };
+}
+
+export function validateSelectedTags(params: {
+  selectedTagNames: string[];
+  typedTagNames?: string[];
+  availableTags: Tag[];
+  allTags?: Tag[];
+}): EntityValidationResult {
+  const availableTagNames = new Set(params.availableTags.map((tag) => tag.name));
+
+  const invalidSelectedTag = params.selectedTagNames.find(
+    (tagName) => !availableTagNames.has(tagName),
+  );
+
+  if (invalidSelectedTag) {
+    return {
+      isValid: false,
+      error: `Le tag "${invalidSelectedTag}" n’est plus disponible.`,
+    };
+  }
+
+  const typedTagNames = params.typedTagNames ?? [];
+  const allTags = params.allTags ?? params.availableTags;
+
+  for (const typedTagName of typedTagNames) {
+    const normalizedTypedName = typedTagName.trim().toLowerCase();
+    if (!normalizedTypedName) continue;
+
+    const existingTag = allTags.find(
+      (tag) => tag.name.trim().toLowerCase() === normalizedTypedName,
+    );
+
+    if (existingTag && (!existingTag.isActive || existingTag.isArchived)) {
+      return {
+        isValid: false,
+        error: `Le tag "${typedTagName}" existe déjà mais n’est plus disponible.`,
+      };
+    }
+  }
+
+  return { isValid: true };
+}
+
+export function validateActionDrafts(
+  actions: Array<{ actionType: string; quantity: number }>,
+): ActionDraftValidationResult {
+  for (const action of actions) {
+    const hasType = action.actionType.trim().length > 0;
+    const hasQuantity = Number.isFinite(Number(action.quantity)) && Number(action.quantity) > 0;
+
+    if (!hasType && !hasQuantity) {
+      continue;
+    }
+
+    if (!hasType) {
+      return {
+        isValid: false,
+        error: "Une action a une quantité mais pas de type.",
+      };
+    }
+
+    if (!hasQuantity) {
+      return {
+        isValid: false,
+        error: `L’action "${action.actionType}" doit avoir une quantité supérieure à 0.`,
+      };
+    }
+  }
+
+  return { isValid: true };
 }

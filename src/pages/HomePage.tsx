@@ -6,7 +6,11 @@ import { db } from "../db/database";
 import { subTaskRepository } from "../repositories/subTaskRepository";
 import type { ActiveSession, SubTask, Tag, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds, formatTimer } from "../utils/duration";
-import { validateSectorSubTaskConsistency } from "../utils/validation";
+import {
+  validateSectorSubTaskConsistency,
+  validateSelectedSector,
+  validateSelectedTags,
+} from "../utils/validation";
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10);
@@ -38,8 +42,9 @@ export function HomePage() {
 
   const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
   const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
-  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
-  const [selectedSectorId, setSelectedSectorId] = useState("");
+const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+const [allTags, setAllTags] = useState<Tag[]>([]);
+const [selectedSectorId, setSelectedSectorId] = useState("");
   const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
   const [newSubTaskName, setNewSubTaskName] = useState("");
   const [draftNote, setDraftNote] = useState("");
@@ -79,9 +84,10 @@ export function HomePage() {
 
     setCurrentSession(session);
     setCurrentSector(sector);
-    setAvailableSectors(usableSectors);
-    setAvailableSubTasks(usableSubTasks);
-    setAvailableTags(usableTags);
+setAvailableSectors(usableSectors);
+setAvailableSubTasks(usableSubTasks);
+setAvailableTags(usableTags);
+setAllTags(allTags);
     setActiveSeconds(totals.activeSeconds);
     setPauseSeconds(totals.pauseSeconds);
 
@@ -173,8 +179,34 @@ export function HomePage() {
   async function handleStartTask() {
     if (!selectedSectorId) return;
 
-    setErrorMessage("");
-    setActionLoading(true);
+setErrorMessage("");
+
+const sectorValidation = validateSelectedSector({
+  sectorId: selectedSectorId,
+  availableSectors,
+  isPause: false,
+});
+
+if (!sectorValidation.isValid) {
+  setErrorMessage(sectorValidation.error ?? "Secteur invalide.");
+  return;
+}
+
+const typedTagNames = parseTagInput(newTagInput);
+
+const tagsValidation = validateSelectedTags({
+  selectedTagNames,
+  typedTagNames,
+  availableTags,
+  allTags,
+});
+
+if (!tagsValidation.isValid) {
+  setErrorMessage(tagsValidation.error ?? "Tags invalides.");
+  return;
+}
+
+setActionLoading(true);
     try {
       const now = new Date().toISOString();
 

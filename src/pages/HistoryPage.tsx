@@ -7,7 +7,10 @@ import type { EntryAction, SubTask, Tag, TimeEntry, WorkSector } from "../types/
 import { formatDurationFromSeconds } from "../utils/duration";
 import {
   findOverlappingEntries,
+  validateActionDrafts,
   validateSectorSubTaskConsistency,
+  validateSelectedSector,
+  validateSelectedTags,
   validateTimeRange,
 } from "../utils/validation";
 
@@ -57,8 +60,9 @@ function parseTagInput(input: string): string[] {
 export function HistoryPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
   const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
-  const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
-  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+const [availableSubTasks, setAvailableSubTasks] = useState<SubTask[]>([]);
+const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+const [allTags, setAllTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
@@ -114,10 +118,11 @@ export function HistoryPage() {
       }),
     );
 
-    setEntries(enrichedEntries);
-    setAvailableSectors(usableSectors);
-    setAvailableSubTasks(usableSubTasks);
-    setAvailableTags(usableTags);
+setEntries(enrichedEntries);
+setAvailableSectors(usableSectors);
+setAvailableSubTasks(usableSubTasks);
+setAvailableTags(usableTags);
+setAllTags(allTags);
 
     if (!selectedSectorId && usableSectors.length > 0) {
       setSelectedSectorId(usableSectors[0].id);
@@ -261,17 +266,50 @@ export function HistoryPage() {
 
     const effectiveSectorId = isPause ? "pause" : selectedSectorId;
     const tagNames = [...selectedTagNames, ...parseTagInput(newTagInput)];
-    const actionsPayload = actionDrafts
-      .map((action) => ({
-        actionType: action.actionType.trim(),
-        quantity: Number(action.quantity),
-      }))
-      .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
+
+const typedTagNames = parseTagInput(newTagInput);
+
+const tagsValidation = validateSelectedTags({
+  selectedTagNames,
+  typedTagNames,
+  availableTags,
+  allTags,
+});
+
+if (!tagsValidation.isValid) {
+  setErrorMessage(tagsValidation.error ?? "Tags invalides.");
+  return;
+}
+
+const actionsValidation = validateActionDrafts(actionDrafts);
+
+if (!actionsValidation.isValid) {
+  setErrorMessage(actionsValidation.error ?? "Actions invalides.");
+  return;
+}
+
+const actionsPayload = actionDrafts
+  .map((action) => ({
+    actionType: action.actionType.trim(),
+    quantity: Number(action.quantity),
+  }))
+  .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
 
     if (!effectiveSectorId) {
-      setErrorMessage("Choisis un secteur.");
-      return;
-    }
+  setErrorMessage("Choisis un secteur.");
+  return;
+}
+
+const sectorValidation = validateSelectedSector({
+  sectorId: effectiveSectorId,
+  availableSectors,
+  isPause,
+});
+
+if (!sectorValidation.isValid) {
+  setErrorMessage(sectorValidation.error ?? "Secteur invalide.");
+  return;
+}
 
     let resolvedSubTaskId: string | undefined = isPause ? undefined : selectedSubTaskId || undefined;
 
