@@ -73,6 +73,7 @@ interface ActionDraft {
 }
 
 type DisplayMode = "grouped" | "chronological" | "duration";
+type SortOrder = "asc" | "desc";
 
 interface GroupedEntries {
   sectorId: string;
@@ -91,13 +92,13 @@ export function DailyPage() {
   const [allTags, setAllTags] = useState<Tag[]>([]);
 
   const [activeSeconds, setActiveSeconds] = useState(0);
-const [pauseSeconds, setPauseSeconds] = useState(0);
-const [topSectorName, setTopSectorName] = useState("—");
-const [topSectorSeconds, setTopSectorSeconds] = useState(0);
-const [selectedDate, setSelectedDate] = useState(todayDateString());
+  const [pauseSeconds, setPauseSeconds] = useState(0);
+  const [topSectorName, setTopSectorName] = useState("—");
+  const [topSectorSeconds, setTopSectorSeconds] = useState(0);
+  const [selectedDate, setSelectedDate] = useState(todayDateString());
 
-const [loading, setLoading] = useState(true);
-const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   const [selectedSectorId, setSelectedSectorId] = useState("");
   const [selectedSubTaskId, setSelectedSubTaskId] = useState("");
@@ -117,11 +118,12 @@ const [saving, setSaving] = useState(false);
   const [selectedFilterSectorId, setSelectedFilterSectorId] = useState("all");
   const [selectedFilterTagName, setSelectedFilterTagName] = useState("all");
   const [displayMode, setDisplayMode] = useState<DisplayMode>("chronological");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("asc");
 
   async function loadData() {
-  const date = selectedDate;
-  const rawEntries = await timeEntryRepository.listByDate(date);
-  const totals = await aggregationService.getDailyTotals(date);
+    const date = selectedDate;
+    const rawEntries = await timeEntryRepository.listByDate(date);
+    const totals = await aggregationService.getDailyTotals(date);
 
     const allSectors = await db.workSectors.toArray();
     const allSubTasks = await db.subTasks.toArray();
@@ -194,8 +196,8 @@ const [saving, setSaving] = useState(false);
   }
 
   useEffect(() => {
-  void loadData();
-}, [selectedDate]);
+    void loadData();
+  }, [selectedDate]);
 
   useEffect(() => {
     if (isPause) {
@@ -229,7 +231,7 @@ const [saving, setSaving] = useState(false);
   }, [availableSubTasks, selectedSectorId]);
 
   const isTodaySelected = selectedDate === todayDateString();
-const formattedSelectedDate = formatDateLabel(selectedDate);
+  const formattedSelectedDate = formatDateLabel(selectedDate);
 
   const filteredEntries = useMemo(() => {
     return entries.filter((entry) => {
@@ -248,9 +250,10 @@ const formattedSelectedDate = formatDateLabel(selectedDate);
     const copied = [...filteredEntries];
 
     if (displayMode === "chronological") {
-      copied.sort(
-        (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
-      );
+      copied.sort((a, b) => {
+        const diff = new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+        return sortOrder === "asc" ? diff : -diff;
+      });
       return copied;
     }
 
@@ -259,11 +262,12 @@ const formattedSelectedDate = formatDateLabel(selectedDate);
       return copied;
     }
 
-    copied.sort(
-      (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
-    );
+    copied.sort((a, b) => {
+      const diff = new Date(a.startAt).getTime() - new Date(b.startAt).getTime();
+      return sortOrder === "asc" ? diff : -diff;
+    });
     return copied;
-  }, [filteredEntries, displayMode]);
+  }, [filteredEntries, displayMode, sortOrder]);
 
   const groupedEntries = useMemo<GroupedEntries[]>(() => {
     const map = new Map<string, GroupedEntries>();
@@ -463,8 +467,8 @@ const formattedSelectedDate = formatDateLabel(selectedDate);
       }
     }
 
-   const startAt = toIsoForDate(selectedDate, startTime);
-const endAt = toIsoForDate(selectedDate, endTime);
+    const startAt = toIsoForDate(selectedDate, startTime);
+    const endAt = toIsoForDate(selectedDate, endTime);
     const durationSeconds = diffSeconds(startAt, endAt);
 
     const timeRangeValidation = validateTimeRange(startAt, endAt);
@@ -475,11 +479,11 @@ const endAt = toIsoForDate(selectedDate, endTime);
     }
 
     const overlapValidation = findOverlappingEntries(entries, {
-  startAt,
-  endAt,
-  date: selectedDate,
-  excludeEntryId: editingEntryId ?? undefined,
-});
+      startAt,
+      endAt,
+      date: selectedDate,
+      excludeEntryId: editingEntryId ?? undefined,
+    });
 
     if (overlapValidation.hasOverlap) {
       setErrorMessage(
@@ -544,16 +548,35 @@ const endAt = toIsoForDate(selectedDate, endTime);
   function renderEntryCard(entry: EntryWithSector) {
     const isPauseEntry = entry.isPause;
 
+    const metaItems: string[] = [];
+
+    metaItems.push(
+      `${new Date(entry.startAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })} – ${new Date(entry.endAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })}`,
+    );
+
+    if (entry.subTask) {
+      metaItems.push(`Sous-tâche : ${entry.subTask.name}`);
+    }
+
+    if (entry.notes) {
+      metaItems.push(entry.notes);
+    }
+
     return (
       <div
         key={entry.id}
-        className={`rounded-2xl p-4 ring-1 ${
-          isPauseEntry ? "bg-amber-50 ring-amber-200" : "bg-neutral-50 ring-neutral-200"
-        }`}
+        className={`rounded-2xl px-4 py-3 ring-1 ${isPauseEntry ? "bg-amber-50 ring-amber-200" : "bg-neutral-50 ring-neutral-200"
+          }`}
       >
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <span
                 className="h-3 w-3 rounded-full"
                 style={{
@@ -561,79 +584,29 @@ const endAt = toIsoForDate(selectedDate, endTime);
                     entry.sector?.color ?? (isPauseEntry ? "#f59e0b" : "#737373"),
                 }}
               />
-              <p className="text-base font-semibold text-neutral-900">
+              <p className="truncate text-base font-semibold text-neutral-900">
                 {entry.sector?.name ?? entry.sectorId}
               </p>
-            </div>
 
-            <p className="mt-1 text-sm text-neutral-600">
-              {new Date(entry.startAt).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-              {" – "}
-              {new Date(entry.endAt).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </p>
-
-            {entry.subTask ? (
-              <p className="mt-3 text-sm text-neutral-600">
-                Sous-tâche : {entry.subTask.name}
-              </p>
-            ) : null}
-
-            {entry.notes ? (
-              <p className="mt-3 text-sm text-neutral-700">{entry.notes}</p>
-            ) : null}
-
-            {entry.tags && entry.tags.length > 0 ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {entry.tags.map((tag) => (
-                  <span
-                    key={tag.id}
-                    className="rounded-full bg-neutral-200 px-3 py-1 text-xs font-medium text-neutral-700"
-                  >
-                    {tag.name}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-
-            {hasActions(entry.actions) ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {entry.actions!.map((action) => (
-                  <span
-                    key={action.id}
-                    className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-800"
-                  >
-                    {formatActionLabel(action)}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </div>
-
-          <div className="flex flex-wrap gap-2 sm:flex-col sm:items-end">
-            <div className="text-left sm:text-right">
-              <p className="text-lg font-semibold text-neutral-900">
-                {formatDurationFromSeconds(entry.durationSeconds)}
-              </p>
-              <p
-                className={`mt-1 text-sm font-medium ${
-                  isPauseEntry ? "text-amber-700" : "text-neutral-500"
-                }`}
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ${isPauseEntry
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-neutral-200 text-neutral-700"
+                  }`}
               >
                 {isPauseEntry ? "Pause" : "Travail"}
-              </p>
+              </span>
+
+              <span className="rounded-full bg-white px-2.5 py-1 text-sm font-semibold text-neutral-900 ring-1 ring-neutral-200">
+                {formatDurationFromSeconds(entry.durationSeconds)}
+              </span>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => handleEditEntry(entry)}
-                className="rounded-full border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                className="rounded-full border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
               >
                 Modifier
               </button>
@@ -641,11 +614,40 @@ const endAt = toIsoForDate(selectedDate, endTime);
               <button
                 type="button"
                 onClick={() => void handleDeleteEntry(entry.id)}
-                className="rounded-full bg-red-100 px-3 py-2 text-sm font-medium text-red-800 ring-1 ring-red-200 hover:bg-red-200"
+                className="rounded-full bg-red-100 px-3 py-1.5 text-sm font-medium text-red-800 ring-1 ring-red-200 hover:bg-red-200"
               >
                 Supprimer
               </button>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-sm text-neutral-600">
+            {metaItems.map((item, index) => (
+              <span
+                key={`${entry.id}-meta-${index}`}
+                className="rounded-full bg-white px-2.5 py-1 ring-1 ring-neutral-200"
+              >
+                {item}
+              </span>
+            ))}
+
+            {entry.tags?.map((tag) => (
+              <span
+                key={tag.id}
+                className="rounded-full bg-neutral-200 px-2.5 py-1 text-xs font-medium text-neutral-700"
+              >
+                {tag.name}
+              </span>
+            ))}
+
+            {entry.actions?.map((action) => (
+              <span
+                key={action.id}
+                className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-800"
+              >
+                {formatActionLabel(action)}
+              </span>
+            ))}
           </div>
         </div>
       </div>
@@ -655,7 +657,7 @@ const endAt = toIsoForDate(selectedDate, endTime);
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-                <header>
+        <header>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <Link
@@ -799,11 +801,10 @@ const endAt = toIsoForDate(selectedDate, endTime);
               <button
                 type="button"
                 onClick={() => setDisplayMode("grouped")}
-                className={`rounded-2xl px-4 py-3 text-sm font-medium ring-1 ${
-                  displayMode === "grouped"
+                className={`rounded-2xl px-4 py-3 text-sm font-medium ring-1 ${displayMode === "grouped"
                     ? "bg-neutral-900 text-white ring-neutral-900"
                     : "bg-white text-neutral-700 ring-neutral-300"
-                }`}
+                  }`}
               >
                 Regrouper par tâche
               </button>
@@ -811,11 +812,10 @@ const endAt = toIsoForDate(selectedDate, endTime);
               <button
                 type="button"
                 onClick={() => setDisplayMode("chronological")}
-                className={`rounded-2xl px-4 py-3 text-sm font-medium ring-1 ${
-                  displayMode === "chronological"
+                className={`rounded-2xl px-4 py-3 text-sm font-medium ring-1 ${displayMode === "chronological"
                     ? "bg-neutral-900 text-white ring-neutral-900"
                     : "bg-white text-neutral-700 ring-neutral-300"
-                }`}
+                  }`}
               >
                 Chronologique
               </button>
@@ -823,11 +823,10 @@ const endAt = toIsoForDate(selectedDate, endTime);
               <button
                 type="button"
                 onClick={() => setDisplayMode("duration")}
-                className={`rounded-2xl px-4 py-3 text-sm font-medium ring-1 ${
-                  displayMode === "duration"
+                className={`rounded-2xl px-4 py-3 text-sm font-medium ring-1 ${displayMode === "duration"
                     ? "bg-neutral-900 text-white ring-neutral-900"
                     : "bg-white text-neutral-700 ring-neutral-300"
-                }`}
+                  }`}
               >
                 Par durée
               </button>
@@ -845,6 +844,22 @@ const endAt = toIsoForDate(selectedDate, endTime);
                 </span>
               )}
             </div>
+
+            {displayMode === "chronological" ? (
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-neutral-700">
+                  Ordre chronologique
+                </label>
+                <select
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value as SortOrder)}
+                  className="rounded-full border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none"
+                >
+                  <option value="asc">Du plus ancien au plus récent</option>
+                  <option value="desc">Du plus récent au plus ancien</option>
+                </select>
+              </div>
+            ) : null}
           </div>
 
           {loading ? (
@@ -1077,11 +1092,10 @@ const endAt = toIsoForDate(selectedDate, endTime);
                                 : [...prev, tag.name],
                             )
                           }
-                          className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                            isSelected
+                          className={`rounded-full px-3 py-1 text-xs font-medium transition ${isSelected
                               ? "bg-neutral-900 text-white"
                               : "bg-neutral-200 text-neutral-700 hover:bg-neutral-300"
-                          }`}
+                            }`}
                         >
                           {tag.name}
                         </button>
