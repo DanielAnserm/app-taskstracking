@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { sectorRepository } from "../repositories/sectorRepository";
 import { subTaskRepository } from "../repositories/subTaskRepository";
 import { tagRepository } from "../repositories/tagRepository";
+import { db } from "../db/database";
 import type { SubTask, Tag, WorkSector } from "../types/domain";
 
 interface DraftSector {
@@ -20,10 +21,13 @@ interface DraftSubTask {
 
 export function SettingsPage() {
   const [sectors, setSectors] = useState<WorkSector[]>([]);
-const [subTasks, setSubTasks] = useState<SubTask[]>([]);
-const [tags, setTags] = useState<Tag[]>([]);
-const [loading, setLoading] = useState(true);
-const [saving, setSaving] = useState(false);
+  const [subTasks, setSubTasks] = useState<SubTask[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [resetMode, setResetMode] = useState<"tracking" | "full" | null>(null);
+  const [resetConfirmText, setResetConfirmText] = useState("");
+  const [resetLoading, setResetLoading] = useState(false);
 
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
@@ -35,29 +39,29 @@ const [saving, setSaving] = useState(false);
   });
 
   const [draftSubTask, setDraftSubTask] = useState<DraftSubTask>({
-  sectorId: "",
-  name: "",
-});
+    sectorId: "",
+    name: "",
+  });
 
   async function loadData() {
     const [allSectors, allSubTasks, allTags] = await Promise.all([
-  sectorRepository.listAll(),
-  subTaskRepository.listAll(),
-  tagRepository.listAll(),
-]);
+      sectorRepository.listAll(),
+      subTaskRepository.listAll(),
+      tagRepository.listAll(),
+    ]);
 
     setSectors(allSectors);
-setSubTasks(allSubTasks);
-setTags(allTags);
+    setSubTasks(allSubTasks);
+    setTags(allTags);
 
-if (!draftSubTask.sectorId && allSectors.length > 0) {
-  const firstUsableSector = allSectors.find((sector) => sector.id !== "pause");
-  if (firstUsableSector) {
-    setDraftSubTask((prev) => ({ ...prev, sectorId: firstUsableSector.id }));
-  }
-}
+    if (!draftSubTask.sectorId && allSectors.length > 0) {
+      const firstUsableSector = allSectors.find((sector) => sector.id !== "pause");
+      if (firstUsableSector) {
+        setDraftSubTask((prev) => ({ ...prev, sectorId: firstUsableSector.id }));
+      }
+    }
 
-setLoading(false);
+    setLoading(false);
   }
 
   useEffect(() => {
@@ -157,7 +161,7 @@ setLoading(false);
     }
   }
 
-    async function handleCreateSubTask() {
+  async function handleCreateSubTask() {
     const trimmedName = draftSubTask.name.trim();
     if (!trimmedName || !draftSubTask.sectorId) return;
 
@@ -255,6 +259,94 @@ setLoading(false);
     await loadData();
   }
 
+  async function handleResetTrackingData() {
+    setResetLoading(true);
+
+    try {
+      await db.transaction(
+        "rw",
+        [db.timeEntries, db.timeEntryTags, db.entryActions, db.activeSessions],
+        async () => {
+          await db.timeEntryTags.clear();
+          await db.entryActions.clear();
+          await db.timeEntries.clear();
+          await db.activeSessions.clear();
+        },
+      );
+
+      setResetMode(null);
+      setResetConfirmText("");
+      await loadData();
+    } finally {
+      setResetLoading(false);
+    }
+  }
+
+  async function handleFullReset() {
+    setResetLoading(true);
+
+    try {
+      await db.transaction(
+        "rw",
+        [
+          db.workSectors,
+          db.subTasks,
+          db.tags,
+          db.timeEntries,
+          db.timeEntryTags,
+          db.entryActions,
+          db.activeSessions,
+        ],
+        async () => {
+          await db.timeEntryTags.clear();
+          await db.entryActions.clear();
+          await db.timeEntries.clear();
+          await db.activeSessions.clear();
+          await db.subTasks.clear();
+          await db.tags.clear();
+          await db.workSectors.clear();
+
+          const now = new Date().toISOString();
+
+          await db.workSectors.put({
+            id: "pause",
+            name: "Pause",
+            color: "#f59e0b",
+            icon: undefined,
+            displayOrder: 999,
+            isActive: true,
+            isArchived: false,
+            createdAt: now,
+            updatedAt: now,
+          });
+        },
+      );
+
+      setResetMode(null);
+      setResetConfirmText("");
+      await loadData();
+    } finally {
+      setResetLoading(false);
+    }
+  }
+
+  async function handleConfirmReset() {
+    if (!resetMode) return;
+
+    if (resetMode === "tracking") {
+      await handleResetTrackingData();
+      return;
+    }
+
+    if (resetMode === "full") {
+      if (resetConfirmText.trim() !== "RESET") {
+        return;
+      }
+
+      await handleFullReset();
+    }
+  }
+
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-6xl space-y-6">
@@ -272,7 +364,7 @@ setLoading(false);
             Gestion simple des secteurs, des sous-tâches et des tags.
           </p>
         </div>
-                <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <h2 className="text-xl font-semibold text-neutral-900">Créer une sous-tâche</h2>
           <div className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
             <div>
@@ -470,7 +562,7 @@ setLoading(false);
             </div>
           )}
         </section>
-                  <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <div className="flex items-center justify-between gap-4">
             <h2 className="text-xl font-semibold text-neutral-900">Sous-tâches existantes</h2>
             {!loading && (
@@ -553,21 +645,19 @@ setLoading(false);
 
                     <div className="mt-3 flex flex-wrap gap-2">
                       <span
-                        className={`rounded-full px-3 py-1 text-xs font-medium ${
-                          subTask.isActive
+                        className={`rounded-full px-3 py-1 text-xs font-medium ${subTask.isActive
                             ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
                             : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
-                        }`}
+                          }`}
                       >
                         {subTask.isActive ? "Actif" : "Inactif"}
                       </span>
 
                       <span
-                        className={`rounded-full px-3 py-1 text-xs font-medium ${
-                          subTask.isArchived
+                        className={`rounded-full px-3 py-1 text-xs font-medium ${subTask.isArchived
                             ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
                             : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
-                        }`}
+                          }`}
                       >
                         {subTask.isArchived ? "Archivé" : "Visible"}
                       </span>
@@ -612,21 +702,19 @@ setLoading(false);
 
                       <div className="mt-3 flex flex-wrap gap-2">
                         <span
-                          className={`rounded-full px-3 py-1 text-xs font-medium ${
-                            tag.isActive
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${tag.isActive
                               ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
                               : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
-                          }`}
+                            }`}
                         >
                           {tag.isActive ? "Actif" : "Inactif"}
                         </span>
 
                         <span
-                          className={`rounded-full px-3 py-1 text-xs font-medium ${
-                            tag.isArchived
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${tag.isArchived
                               ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
                               : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
-                          }`}
+                            }`}
                         >
                           {tag.isArchived ? "Archivé" : "Visible"}
                         </span>
@@ -656,7 +744,142 @@ setLoading(false);
             </div>
           )}
         </section>
+
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-red-100">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-semibold text-neutral-900">Zone sensible</h2>
+              <p className="mt-2 text-sm text-neutral-600">
+                Ces actions suppriment des données locales de manière irréversible.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">
+                Supprimer les données de suivi
+              </h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Supprime les entrées, pauses, actions, tags liés aux entrées et sessions en cours,
+                mais conserve les tâches, sous-tâches et tags.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setResetMode("tracking");
+                  setResetConfirmText("");
+                }}
+                className="mt-4 rounded-full bg-amber-100 px-5 py-3 text-sm font-medium text-amber-800 ring-1 ring-amber-200"
+              >
+                Supprimer les données de suivi
+              </button>
+            </div>
+
+            <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">
+                Réinitialisation complète
+              </h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Supprime toutes les données locales de l’application. Les tâches, sous-tâches et tags
+                seront aussi supprimés. Le secteur Pause sera recréé automatiquement.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setResetMode("full");
+                  setResetConfirmText("");
+                }}
+                className="mt-4 rounded-full bg-red-100 px-5 py-3 text-sm font-medium text-red-800 ring-1 ring-red-200"
+              >
+                Réinitialisation complète
+              </button>
+            </div>
+          </div>
+        </section>
       </div>
+
+      {resetMode ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+          <div className="w-full max-w-2xl rounded-3xl bg-white p-6 shadow-xl ring-1 ring-black/5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-2xl font-semibold tracking-tight text-neutral-900">
+                  {resetMode === "tracking"
+                    ? "Supprimer les données de suivi ?"
+                    : "Réinitialisation complète ?"}
+                </h3>
+
+                <p className="mt-2 text-sm text-neutral-600">
+                  {resetMode === "tracking"
+                    ? "Cette action supprimera toutes les entrées, pauses, actions, tags liés aux entrées et sessions en cours, mais conservera les tâches, sous-tâches et tags."
+                    : "Cette action supprimera toutes les données locales de l’application. Pour confirmer, tape RESET ci-dessous."}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (resetLoading) return;
+                  setResetMode(null);
+                  setResetConfirmText("");
+                }}
+                className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Fermer
+              </button>
+            </div>
+
+            {resetMode === "full" ? (
+              <div className="mt-5">
+                <label className="mb-2 block text-sm font-medium text-neutral-700">
+                  Tape RESET pour confirmer
+                </label>
+                <input
+                  type="text"
+                  value={resetConfirmText}
+                  onChange={(e) => setResetConfirmText(e.target.value)}
+                  placeholder="RESET"
+                  className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                />
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (resetLoading) return;
+                  setResetMode(null);
+                  setResetConfirmText("");
+                }}
+                className="rounded-full border border-neutral-300 bg-white px-5 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Annuler
+              </button>
+
+              <button
+                type="button"
+                onClick={handleConfirmReset}
+                disabled={
+                  resetLoading ||
+                  (resetMode === "full" && resetConfirmText.trim() !== "RESET")
+                }
+                className={`rounded-full px-5 py-3 text-sm font-medium text-white disabled:opacity-50 ${resetMode === "tracking" ? "bg-amber-600" : "bg-red-600"
+                  }`}
+              >
+                {resetLoading
+                  ? "Suppression en cours..."
+                  : resetMode === "tracking"
+                    ? "Oui, supprimer les données de suivi"
+                    : "Oui, tout réinitialiser"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
