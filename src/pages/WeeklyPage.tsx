@@ -19,14 +19,6 @@ interface DayBucket {
   pauseSeconds: number;
 }
 
-interface SectorChartSlice {
-  sectorId: string;
-  name: string;
-  seconds: number;
-  color: string;
-  percentage: number;
-}
-
 interface TaskGroup {
   sectorId: string;
   sectorName: string;
@@ -35,7 +27,13 @@ interface TaskGroup {
   isPause: boolean;
 }
 
-type WeekViewMode = "list" | "calendar";
+interface SectorChartSlice {
+  sectorId: string;
+  name: string;
+  seconds: number;
+  color: string;
+  percentage: number;
+}
 
 interface CalendarBlock {
   id: string;
@@ -45,11 +43,32 @@ interface CalendarBlock {
   endMinutes: number;
   durationSeconds: number;
   isPause: boolean;
+  timeLabel: string;
 }
+
+interface PositionedCalendarBlock extends CalendarBlock {
+  column: number;
+  columnsCount: number;
+}
+
+interface ShortCalendarBlockCluster {
+  id: string;
+  startMinutes: number;
+  endMinutes: number;
+  visualStartMinutes: number;
+  visualEndMinutes: number;
+  totalSeconds: number;
+  blocks: CalendarBlock[];
+}
+
+type WeekViewMode = "list" | "calendar";
+type ChartPauseMode = "with_pauses" | "without_pauses";
 
 const CALENDAR_START_HOUR = 6;
 const CALENDAR_END_HOUR = 22;
 const CALENDAR_TOTAL_MINUTES = (CALENDAR_END_HOUR - CALENDAR_START_HOUR) * 60;
+const SHORT_CALENDAR_TASK_MAX_SECONDS = 20 * 60;
+const SHORT_CALENDAR_CLUSTER_MAX_GAP_MINUTES = 1;
 
 function startOfWeek(date: Date): Date {
   const copy = new Date(date);
@@ -86,6 +105,7 @@ function formatShortDayLabel(date: Date): string {
   return date.toLocaleDateString("fr-CA", {
     weekday: "short",
     day: "numeric",
+    month: "short",
   });
 }
 
@@ -122,7 +142,7 @@ function formatHourLabel(hour: number): string {
   return `${String(hour).padStart(2, "0")}:00`;
 }
 
-function formatEntryTimeRange(startAt: string, endAt: string): string {
+function formatTimeRange(startAt: string, endAt: string): string {
   return `${new Date(startAt).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
@@ -130,6 +150,162 @@ function formatEntryTimeRange(startAt: string, endAt: string): string {
     hour: "2-digit",
     minute: "2-digit",
   })}`;
+}
+
+function layoutOverlappingBlocks(blocks: CalendarBlock[]): PositionedCalendarBlock[] {
+  if (blocks.length === 0) return [];
+
+  const sorted = [...blocks].sort((a, b) => {
+    if (a.startMinutes !== b.startMinutes) {
+      return a.startMinutes - b.startMinutes;
+    }
+    return a.endMinutes - b.endMinutes;
+  });
+
+  const positioned: PositionedCalendarBlock[] = [];
+
+  let cluster: CalendarBlock[] = [];
+  let clusterMaxEnd = -1;
+
+  function flushCluster(clusterBlocks: CalendarBlock[]) {
+    if (clusterBlocks.length === 0) return;
+
+    const active: Array<{ endMinutes: number; column: number }> = [];
+    const clusterPositioned: PositionedCalendarBlock[] = [];
+    let maxColumns = 0;
+
+    for (const block of clusterBlocks) {
+      for (let index = active.length - 1; index >= 0; index -= 1) {
+        if (active[index].endMinutes <= block.startMinutes) {
+          active.splice(index, 1);
+        }
+      }
+
+      const usedColumns = new Set(active.map((item) => item.column));
+      let column = 0;
+      while (usedColumns.has(column)) {
+        column += 1;
+      }
+
+      active.push({ endMinutes: block.endMinutes, column });
+      maxColumns = Math.max(maxColumns, active.length);
+
+      clusterPositioned.push({
+        ...block,
+        column,
+        columnsCount: 1,
+      });
+    }
+
+    for (const block of clusterPositioned) {
+      block.columnsCount = maxColumns;
+    }
+
+    positioned.push(...clusterPositioned);
+  }
+
+  for (const block of sorted) {
+    if (cluster.length === 0) {
+      cluster = [block];
+      clusterMaxEnd = block.endMinutes;
+      continue;
+    }
+
+    if (block.startMinutes < clusterMaxEnd) {
+      cluster.push(block);
+      clusterMaxEnd = Math.max(clusterMaxEnd, block.endMinutes);
+    } else {
+      flushCluster(cluster);
+      cluster = [block];
+      clusterMaxEnd = block.endMinutes;
+    }
+  }
+
+  flushCluster(cluster);
+
+  return positioned;
+}
+
+function groupShortCalendarBlocks(
+  blocks: CalendarBlock[],
+  mainBlocks: CalendarBlock[],
+): ShortCalendarBlockCluster[] {
+  if (blocks.length === 0) return [];
+
+  const sorted = [...blocks].sort((a, b) => {
+    if (a.startMinutes !== b.startMinutes) {
+      return a.startMinutes - b.startMinutes;
+    }
+    return a.endMinutes - b.endMinutes;
+  });
+
+  const sortedMainBlocks = [...mainBlocks].sort((a, b) => {
+    if (a.startMinutes !== b.startMinutes) {
+      return a.startMinutes - b.startMinutes;
+    }
+    return a.endMinutes - b.endMinutes;
+  });
+
+  const clusters: ShortCalendarBlockCluster[] = [];
+  let currentBlocks: CalendarBlock[] = [];
+  let currentStart = 0;
+  let currentEnd = 0;
+
+  function flushCluster() {
+    if (currentBlocks.length === 0) return;
+
+    const previousMainBlock = [...sortedMainBlocks]
+      .reverse()
+      .find((block) => block.endMinutes <= currentStart);
+
+    const nextMainBlock = sortedMainBlocks.find((block) => block.startMinutes >= currentEnd);
+
+    const touchesPreviousMainBlock =
+      previousMainBlock !== undefined && currentStart - previousMainBlock.endMinutes <= 1;
+    const touchesNextMainBlock =
+      nextMainBlock !== undefined && nextMainBlock.startMinutes - currentEnd <= 1;
+
+    const visualStartMinutes = touchesPreviousMainBlock
+      ? previousMainBlock.endMinutes
+      : currentStart;
+    const visualEndMinutes = touchesNextMainBlock ? nextMainBlock.startMinutes : currentEnd;
+
+    clusters.push({
+      id: currentBlocks.map((block) => block.id).join("-"),
+      startMinutes: currentStart,
+      endMinutes: currentEnd,
+      visualStartMinutes:
+        visualEndMinutes > visualStartMinutes ? visualStartMinutes : currentStart,
+      visualEndMinutes: visualEndMinutes > visualStartMinutes ? visualEndMinutes : currentEnd,
+      totalSeconds: currentBlocks.reduce((sum, block) => sum + block.durationSeconds, 0),
+      blocks: currentBlocks,
+    });
+  }
+
+  for (const block of sorted) {
+    if (currentBlocks.length === 0) {
+      currentBlocks = [block];
+      currentStart = block.startMinutes;
+      currentEnd = block.endMinutes;
+      continue;
+    }
+
+    const gap = block.startMinutes - currentEnd;
+
+    if (gap <= SHORT_CALENDAR_CLUSTER_MAX_GAP_MINUTES) {
+      currentBlocks.push(block);
+      currentEnd = Math.max(currentEnd, block.endMinutes);
+    } else {
+      flushCluster();
+      currentBlocks = [block];
+      currentStart = block.startMinutes;
+      currentEnd = block.endMinutes;
+    }
+  }
+
+  flushCluster();
+
+  return clusters;
 }
 
 export function WeeklyPage() {
@@ -142,6 +318,7 @@ export function WeeklyPage() {
   const [selectedFilterSectorId, setSelectedFilterSectorId] = useState("all");
   const [selectedFilterTagName, setSelectedFilterTagName] = useState("all");
   const [viewMode, setViewMode] = useState<WeekViewMode>("list");
+  const [chartPauseMode, setChartPauseMode] = useState<ChartPauseMode>("with_pauses");
 
   useEffect(() => {
     let cancelled = false;
@@ -257,18 +434,16 @@ export function WeeklyPage() {
         }
       }
 
-      const groups = Array.from(groupsMap.values()).sort((a, b) => b.totalSeconds - a.totalSeconds);
-
       return {
         ...day,
-        groups,
+        groups: Array.from(groupsMap.values()).sort((a, b) => b.totalSeconds - a.totalSeconds),
       };
     });
   }, [buckets]);
 
   const calendarBuckets = useMemo(() => {
     return buckets.map((day) => {
-      const blocks: CalendarBlock[] = day.entries
+      const rawBlocks: CalendarBlock[] = day.entries
         .map((entry) => {
           const rawStart = isoToMinutes(entry.startAt);
           const rawEnd = isoToMinutes(entry.endAt);
@@ -287,22 +462,30 @@ export function WeeklyPage() {
             endMinutes,
             durationSeconds: entry.durationSeconds,
             isPause: entry.isPause,
+            timeLabel: formatTimeRange(entry.startAt, entry.endAt),
           };
         })
         .filter(Boolean) as CalendarBlock[];
 
+      const shortBlocks = rawBlocks.filter(
+        (block) => block.durationSeconds < SHORT_CALENDAR_TASK_MAX_SECONDS,
+      );
+      const mainBlocks = rawBlocks.filter(
+        (block) => block.durationSeconds >= SHORT_CALENDAR_TASK_MAX_SECONDS,
+      );
+
       return {
         ...day,
-        blocks,
+        shortBlockClusters: groupShortCalendarBlocks(shortBlocks, mainBlocks),
+        blocks: layoutOverlappingBlocks(mainBlocks),
       };
     });
   }, [buckets]);
 
   const weekActiveSeconds = buckets.reduce((sum, day) => sum + day.activeSeconds, 0);
   const weekPauseSeconds = buckets.reduce((sum, day) => sum + day.pauseSeconds, 0);
-  const totalWeekSeconds = weekActiveSeconds + weekPauseSeconds;
-  const activeDays = buckets.filter((day) => day.entries.length > 0).length;
   const entryCount = weeklyEntries.length;
+  const activeDays = buckets.filter((day) => day.entries.length > 0).length;
 
   const topSector = useMemo(() => {
     const map = new Map<string, { name: string; seconds: number }>();
@@ -328,10 +511,21 @@ export function WeeklyPage() {
     return Array.from(map.values()).sort((a, b) => b.seconds - a.seconds)[0];
   }, [weeklyEntries]);
 
+  const chartEntries = useMemo(() => {
+    if (chartPauseMode === "with_pauses") {
+      return weeklyEntries;
+    }
+    return weeklyEntries.filter((entry) => !entry.isPause);
+  }, [weeklyEntries, chartPauseMode]);
+
+  const chartTotalSeconds = useMemo(() => {
+    return chartEntries.reduce((sum, entry) => sum + entry.durationSeconds, 0);
+  }, [chartEntries]);
+
   const sectorChartData = useMemo<SectorChartSlice[]>(() => {
     const map = new Map<string, { name: string; seconds: number; color: string }>();
 
-    for (const entry of weeklyEntries) {
+    for (const entry of chartEntries) {
       const existing = map.get(entry.sectorId);
 
       if (existing) {
@@ -345,7 +539,7 @@ export function WeeklyPage() {
       }
     }
 
-    if (map.size === 0 || totalWeekSeconds === 0) {
+    if (map.size === 0 || chartTotalSeconds === 0) {
       return [];
     }
 
@@ -355,10 +549,10 @@ export function WeeklyPage() {
         name: item.name,
         seconds: item.seconds,
         color: item.color,
-        percentage: Math.round((item.seconds / totalWeekSeconds) * 1000) / 10,
+        percentage: Math.round((item.seconds / chartTotalSeconds) * 1000) / 10,
       }))
       .sort((a, b) => b.seconds - a.seconds);
-  }, [weeklyEntries, totalWeekSeconds]);
+  }, [chartEntries, chartTotalSeconds]);
 
   const weekRangeLabel = formatRangeLabel(weekDays[0], weekDays[6]);
 
@@ -382,16 +576,18 @@ export function WeeklyPage() {
               </p>
             </div>
 
-            <div className="flex flex-col items-start gap-3 sm:items-end">
-              <button
-                type="button"
-                onClick={() => setWeekStart(startOfWeek(new Date()))}
-                className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-              >
-                Semaine actuelle
-              </button>
+            <div className="flex flex-col items-center gap-3 lg:min-w-[320px]">
+              <div className="flex w-full justify-center">
+                <button
+                  type="button"
+                  onClick={() => setWeekStart(startOfWeek(new Date()))}
+                  className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Semaine actuelle
+                </button>
+              </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center justify-center gap-3">
                 <button
                   type="button"
                   onClick={() => setWeekStart((prev) => addDays(prev, -7))}
@@ -451,13 +647,9 @@ export function WeeklyPage() {
           </div>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <section className="grid gap-4 lg:grid-cols-[1.15fr_0.85fr]">
           <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-base font-semibold text-neutral-900">Filtres</h2>
-              </div>
-            </div>
+            <h2 className="text-base font-semibold text-neutral-900">Filtres</h2>
 
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div>
@@ -539,7 +731,7 @@ export function WeeklyPage() {
               <p className="mt-1 text-sm text-neutral-600">
                 {viewMode === "list"
                   ? "Chaque jour regroupe les tâches avec leur temps total."
-                  : "Lecture hebdomadaire par blocs horaires, dans l’esprit d’un agenda."}
+                  : "Lecture hebdomadaire par blocs horaires."}
               </p>
             </div>
           </div>
@@ -547,7 +739,7 @@ export function WeeklyPage() {
           {loading ? (
             <p className="mt-4 text-sm text-neutral-600">Chargement…</p>
           ) : viewMode === "list" ? (
-            <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {groupedBuckets.map((day) => (
                 <section
                   key={day.date}
@@ -619,8 +811,8 @@ export function WeeklyPage() {
             </div>
           ) : (
             <div className="mt-5 overflow-x-auto">
-              <div className="min-w-[980px]">
-                <div className="grid grid-cols-[72px_repeat(7,minmax(120px,1fr))] gap-0">
+              <div className="min-w-[1040px]">
+                <div className="grid grid-cols-[72px_repeat(7,minmax(130px,1fr))] gap-0">
                   <div />
                   {calendarBuckets.map((day) => (
                     <div
@@ -664,34 +856,92 @@ export function WeeklyPage() {
                       ))}
 
                       <div className="absolute inset-0">
+                        {day.shortBlockClusters.map((cluster) => {
+                          const top =
+                            ((cluster.visualStartMinutes - CALENDAR_START_HOUR * 60) /
+                              CALENDAR_TOTAL_MINUTES) *
+                            100;
+
+                          const computedHeight =
+                            ((cluster.visualEndMinutes - cluster.visualStartMinutes) /
+                              CALENDAR_TOTAL_MINUTES) *
+                            100;
+
+                          const height = Math.max(computedHeight, 0.1);
+
+                          return (
+                            <div
+                              key={cluster.id}
+                              className="absolute"
+                              style={{
+                                top: `${top}%`,
+                                height: `${height}%`,
+                                left: "calc(0% + 4px)",
+                                width: "calc(100% - 8px)",
+                              }}
+                            >
+                              <div className="flex h-full w-full items-stretch gap-1 overflow-hidden rounded-xl border border-neutral-200 bg-white/85 p-1 shadow-sm backdrop-blur-sm">
+                                {cluster.blocks.map((block) => (
+                                  <div
+                                    key={block.id}
+                                    className="h-full min-w-[6px] rounded-lg border"
+                                    style={{
+                                      flexBasis: 0,
+                                      flexGrow: Math.max(block.durationSeconds, 1),
+                                      backgroundColor: hexToRgba(
+                                        block.color,
+                                        block.isPause ? 0.42 : 0.38,
+                                      ),
+                                      borderColor: hexToRgba(block.color, 0.65),
+                                    }}
+                                    title={`${block.title} · ${block.timeLabel} · ${formatDurationFromSeconds(
+                                      block.durationSeconds,
+                                    )}`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+
                         {day.blocks.map((block) => {
                           const top =
                             ((block.startMinutes - CALENDAR_START_HOUR * 60) / CALENDAR_TOTAL_MINUTES) *
                             100;
-                          const height = Math.max(
-                            ((block.endMinutes - block.startMinutes) / CALENDAR_TOTAL_MINUTES) * 100,
-                            3,
-                          );
+
+                          const computedHeight =
+                            ((block.endMinutes - block.startMinutes) / CALENDAR_TOTAL_MINUTES) *
+                            100;
+
+                          const height = Math.max(computedHeight, 2.1);
+                          const showTitleOnly = block.durationSeconds <= 45 * 60;
+
+                          const widthPercent = 100 / block.columnsCount;
+                          const leftPercent = block.column * widthPercent;
 
                           return (
                             <div
                               key={block.id}
-                              className="absolute left-1 right-1 overflow-hidden rounded-xl border px-2 py-1 shadow-sm"
+                              className="absolute overflow-hidden rounded-lg border px-1.5 py-1 shadow-sm"
                               style={{
                                 top: `${top}%`,
                                 height: `${height}%`,
+                                left: `calc(${leftPercent}% + 4px)`,
+                                width: `calc(${widthPercent}% - 8px)`,
                                 backgroundColor: hexToRgba(block.color, block.isPause ? 0.18 : 0.14),
                                 borderColor: hexToRgba(block.color, 0.35),
                                 color: block.color,
                               }}
-                              title={`${block.title} · ${formatDurationFromSeconds(
+                              title={`${block.title} · ${block.timeLabel} · ${formatDurationFromSeconds(
                                 block.durationSeconds,
                               )}`}
                             >
-                              <p className="truncate text-[11px] font-semibold">{block.title}</p>
-                              <p className="truncate text-[10px] opacity-80">
-                                {block.isPause ? "Pause" : "Travail"}
-                              </p>
+                              <p className="truncate text-[10px] font-semibold">{block.title}</p>
+                              {!showTitleOnly ? (
+                                <p className="truncate text-[9px] opacity-80">
+                                  {block.timeLabel}
+                                </p>
+                              ) : null}
                             </div>
                           );
                         })}
@@ -705,13 +955,41 @@ export function WeeklyPage() {
         </section>
 
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <div>
-            <h3 className="text-2xl font-semibold tracking-tight text-neutral-900">
-              Répartition de la semaine
-            </h3>
-            <p className="text-sm text-neutral-600">
-              Temps total par tâche, pauses incluses.
-            </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-2xl font-semibold tracking-tight text-neutral-900">
+                Répartition de la semaine
+              </h3>
+              <p className="text-sm text-neutral-600">
+                Temps total par tâche sur la semaine.
+              </p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setChartPauseMode("with_pauses")}
+                className={`rounded-xl px-4 py-2.5 text-sm font-medium ring-1 ${
+                  chartPauseMode === "with_pauses"
+                    ? "bg-neutral-900 text-white ring-neutral-900"
+                    : "bg-white text-neutral-700 ring-neutral-300"
+                }`}
+              >
+                Avec pauses
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setChartPauseMode("without_pauses")}
+                className={`rounded-xl px-4 py-2.5 text-sm font-medium ring-1 ${
+                  chartPauseMode === "without_pauses"
+                    ? "bg-neutral-900 text-white ring-neutral-900"
+                    : "bg-white text-neutral-700 ring-neutral-300"
+                }`}
+              >
+                Sans pauses
+              </button>
+            </div>
           </div>
 
           {sectorChartData.length === 0 ? (
@@ -744,10 +1022,10 @@ export function WeeklyPage() {
                     Total semaine
                   </p>
                   <p className="mt-2 text-2xl font-bold tracking-tight text-neutral-900">
-                    {formatDurationFromSeconds(totalWeekSeconds)}
+                    {formatDurationFromSeconds(chartTotalSeconds)}
                   </p>
                   <p className="mt-1 text-xs text-neutral-500">
-                    {activeDays} jour{activeDays > 1 ? "s" : ""} actif{activeDays > 1 ? "s" : ""}
+                    {chartPauseMode === "with_pauses" ? "Pauses incluses" : "Pauses exclues"}
                   </p>
                 </div>
               </div>
