@@ -51,6 +51,29 @@ function isoToDateInput(iso: string): string {
   return iso.slice(0, 10);
 }
 
+function resolveEditedIso({
+  originalIso,
+  originalDate,
+  targetDate,
+  targetTime,
+}: {
+  originalIso: string;
+  originalDate: string;
+  targetDate: string;
+  targetTime: string;
+}): string {
+  const originalTime = isoToTimeInput(originalIso);
+  const originalIsoDate = isoToDateInput(originalIso);
+  const isSameVisibleTime = targetTime === originalTime;
+  const isSameVisibleDate = targetDate === originalDate || targetDate === originalIsoDate;
+
+  if (isSameVisibleDate && isSameVisibleTime) {
+    return originalIso;
+  }
+
+  return toIsoForDate(targetDate, targetTime);
+}
+
 function parseTagInput(input: string): string[] {
   return input
     .split(",")
@@ -348,8 +371,31 @@ export function HistoryPage() {
       return;
     }
 
-    const startAt = toIsoForDate(entryDate, startTime);
-    const endAt = toIsoForDate(entryDate, endTime);
+    if (!editingEntryId) {
+      setErrorMessage("Sélectionne d’abord une entrée à modifier.");
+      return;
+    }
+
+    const existingEntry = entries.find((entry) => entry.id === editingEntryId);
+    if (!existingEntry) {
+      setErrorMessage("Entrée introuvable.");
+      return;
+    }
+
+    const startAt = resolveEditedIso({
+      originalIso: existingEntry.startAt,
+      originalDate: existingEntry.date,
+      targetDate: entryDate,
+      targetTime: startTime,
+    });
+
+    const endAt = resolveEditedIso({
+      originalIso: existingEntry.endAt,
+      originalDate: existingEntry.date,
+      targetDate: entryDate,
+      targetTime: endTime,
+    });
+
     const durationSeconds = diffSeconds(startAt, endAt);
 
     const timeRangeValidation = validateTimeRange(startAt, endAt);
@@ -373,19 +419,8 @@ export function HistoryPage() {
       return;
     }
 
-    if (!editingEntryId) {
-      setErrorMessage("Sélectionne d’abord une entrée à modifier.");
-      return;
-    }
-
     setSaving(true);
     try {
-      const existingEntry = entries.find((entry) => entry.id === editingEntryId);
-      if (!existingEntry) {
-        setErrorMessage("Entrée introuvable.");
-        return;
-      }
-
       const nowIso = new Date().toISOString();
 
       const updatedEntry: TimeEntry = {

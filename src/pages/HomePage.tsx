@@ -1399,35 +1399,40 @@ export function HomePage() {
             >
               Suivi du jour
             </Link>
-            <Link
-              to="/historique"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Historique
-            </Link>
+
             <Link
               to="/hebdo"
               className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
             >
               Suivi hebdo
             </Link>
+
             <Link
               to="/mensuel"
               className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
             >
               Suivi mensuel
             </Link>
+
             <Link
               to="/global"
               className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
             >
               Vue globale
             </Link>
+
             <Link
               to="/parametres"
               className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
             >
               Paramètres
+            </Link>
+
+            <Link
+              to="/historique"
+              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Historique
             </Link>
           </nav>
         </section>
