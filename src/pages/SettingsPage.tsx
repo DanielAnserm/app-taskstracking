@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type ChangeEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { sectorRepository } from "../repositories/sectorRepository";
 import { subTaskRepository } from "../repositories/subTaskRepository";
@@ -19,6 +19,248 @@ interface DraftSubTask {
   name: string;
 }
 
+interface ImportCsvRow {
+  importKey: string;
+  originalId: string;
+  date: string;
+  startAt: string;
+  endAt: string;
+  durationSeconds: number;
+  type: string;
+  isPause: boolean;
+  sectorName: string;
+  subTaskName: string;
+  tagNames: string[];
+  notes: string;
+  actions: Array<{ actionType: string; quantity: number }>;
+  isDuplicate: boolean;
+  errors: string[];
+}
+
+interface ImportPreview {
+  fileName: string;
+  rows: ImportCsvRow[];
+  totalRows: number;
+  validRows: number;
+  duplicateRows: number;
+  invalidRows: number;
+  importableRows: number;
+  sectorsToCreate: string[];
+  subTasksToCreate: Array<{ sectorName: string; subTaskName: string }>;
+  tagsToCreate: string[];
+}
+
+type CsvValue = string | number | boolean | null | undefined;
+
+function escapeCsvValue(value: CsvValue): string {
+  if (value === null || value === undefined) return "";
+
+  const text = String(value).replace(/\r?\n|\r/g, " ");
+
+  if (text.includes(",") || text.includes('"') || text.includes(";")) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+
+  return text;
+}
+
+function formatCsvDurationFromSeconds(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+
+  return `${hours} h ${String(minutes).padStart(2, "0")}`;
+}
+
+function getTimeLabel(isoDate: string | undefined): string {
+  if (!isoDate) return "";
+
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return "";
+
+  return date.toLocaleTimeString("fr-CA", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function normalizeForKey(value: CsvValue): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function buildImportKey(params: {
+  date: string;
+  startAt: string;
+  endAt: string;
+  type: string;
+  sectorName: string;
+  subTaskName: string;
+}): string {
+  return [
+    params.date,
+    params.startAt,
+    params.endAt,
+    normalizeForKey(params.type),
+    normalizeForKey(params.sectorName),
+    normalizeForKey(params.subTaskName),
+  ].join("|");
+}
+
+function detectCsvSeparator(text: string): "," | ";" {
+  const firstLine = text.split(/\r?\n/)[0] ?? "";
+  let commaCount = 0;
+  let semicolonCount = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < firstLine.length; index += 1) {
+    const char = firstLine[index];
+    const nextChar = firstLine[index + 1];
+
+    if (char === '"' && nextChar === '"') {
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && char === ",") commaCount += 1;
+    if (!inQuotes && char === ";") semicolonCount += 1;
+  }
+
+  return semicolonCount > commaCount ? ";" : ",";
+}
+
+function parseCsv(text: string): string[][] {
+  const separator = detectCsvSeparator(text);
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentValue = "";
+  let inQuotes = false;
+
+  const cleanText = text.replace(/^\uFEFF/, "");
+
+  for (let index = 0; index < cleanText.length; index += 1) {
+    const char = cleanText[index];
+    const nextChar = cleanText[index + 1];
+
+    if (char === '"' && nextChar === '"') {
+      currentValue += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (!inQuotes && char === separator) {
+      currentRow.push(currentValue);
+      currentValue = "";
+      continue;
+    }
+
+    if (!inQuotes && (char === "\n" || char === "\r")) {
+      if (char === "\r" && nextChar === "\n") {
+        index += 1;
+      }
+
+      currentRow.push(currentValue);
+      if (currentRow.some((value) => value.trim() !== "")) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      currentValue = "";
+      continue;
+    }
+
+    currentValue += char;
+  }
+
+  currentRow.push(currentValue);
+  if (currentRow.some((value) => value.trim() !== "")) {
+    rows.push(currentRow);
+  }
+
+  return rows;
+}
+
+function normalizeHeader(header: string): string {
+  return normalizeForKey(header).replace(/\s+/g, "_");
+}
+
+function csvRowsToObjects(text: string): Array<Record<string, string>> {
+  const rows = parseCsv(text);
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].map(normalizeHeader);
+
+  return rows.slice(1).map((row) => {
+    const object: Record<string, string> = {};
+    headers.forEach((header, index) => {
+      object[header] = row[index]?.trim() ?? "";
+    });
+    return object;
+  });
+}
+
+function parseIsoFromCsv(row: Record<string, string>, isoKey: string, timeKey: string): string {
+  const isoValue = row[isoKey]?.trim();
+  if (isoValue) return isoValue;
+
+  const date = row.date?.trim();
+  const time = row[timeKey]?.trim();
+  if (!date || !time) return "";
+
+  return `${date}T${time}:00`;
+}
+
+function parseTagsFromCsv(value: string): string[] {
+  return value
+    .split("|")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function parseActionsFromCsv(value: string): Array<{ actionType: string; quantity: number }> {
+  return value
+    .split("|")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const [rawType, rawQuantity] = part.split(":");
+      const actionType = rawType?.trim() ?? "";
+      const quantity = Number(rawQuantity?.trim() ?? "1");
+      return { actionType, quantity };
+    })
+    .filter((action) => action.actionType && Number.isFinite(action.quantity) && action.quantity > 0);
+}
+
+function downloadCsv(filename: string, csvContent: string) {
+  const blob = new Blob([`\uFEFF${csvContent}`], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
+}
+
 export function SettingsPage() {
   const [sectors, setSectors] = useState<WorkSector[]>([]);
   const [subTasks, setSubTasks] = useState<SubTask[]>([]);
@@ -28,6 +270,11 @@ export function SettingsPage() {
   const [resetMode, setResetMode] = useState<"tracking" | "full" | null>(null);
   const [resetConfirmText, setResetConfirmText] = useState("");
   const [resetLoading, setResetLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importMessage, setImportMessage] = useState("");
+  const [importError, setImportError] = useState("");
 
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
@@ -259,6 +506,479 @@ export function SettingsPage() {
     await loadData();
   }
 
+  async function handleExportCsv() {
+    setExportLoading(true);
+
+    try {
+      const [rawEntries, allSectors, allSubTasks, allTags, allLinks, allActions] =
+        await Promise.all([
+          db.timeEntries.toArray(),
+          db.workSectors.toArray(),
+          db.subTasks.toArray(),
+          db.tags.toArray(),
+          db.timeEntryTags.toArray(),
+          db.entryActions.toArray(),
+        ]);
+
+      const sectorsById = new Map(allSectors.map((sector) => [sector.id, sector]));
+      const subTasksById = new Map(allSubTasks.map((subTask) => [subTask.id, subTask]));
+      const tagsById = new Map(allTags.map((tag) => [tag.id, tag]));
+
+      const headers = [
+        "import_key",
+        "id",
+        "date",
+        "debut_iso",
+        "fin_iso",
+        "heure_debut",
+        "heure_fin",
+        "duree_secondes",
+        "duree",
+        "type",
+        "tache",
+        "sous_tache",
+        "tags",
+        "note",
+        "actions",
+      ];
+
+      const rows = rawEntries
+        .slice()
+        .sort((a, b) => a.startAt.localeCompare(b.startAt))
+        .map((entry) => {
+          const sector = sectorsById.get(entry.sectorId);
+          const subTask = entry.subTaskId ? subTasksById.get(entry.subTaskId) : undefined;
+
+          const entryTags = allLinks
+            .filter((link) => link.timeEntryId === entry.id)
+            .map((link) => tagsById.get(link.tagId)?.name)
+            .filter(Boolean)
+            .join(" | ");
+
+          const entryActions = allActions
+            .filter((action) => action.timeEntryId === entry.id)
+            .map((action) => {
+              const actionType = action.actionType?.trim() || "Action";
+              return `${actionType}: ${action.quantity}`;
+            })
+            .join(" | ");
+
+          const durationSeconds =
+            entry.durationSeconds ??
+            Math.max(
+              0,
+              Math.round(
+                (new Date(entry.endAt).getTime() - new Date(entry.startAt).getTime()) / 1000,
+              ),
+            );
+
+          const date = entry.date || entry.startAt.slice(0, 10);
+          const type = entry.isPause ? "Pause" : "Travail";
+          const sectorName = sector?.name || "";
+          const subTaskName = subTask?.name || "";
+          const importKey = buildImportKey({
+            date,
+            startAt: entry.startAt,
+            endAt: entry.endAt,
+            type,
+            sectorName,
+            subTaskName,
+          });
+
+          return [
+            importKey,
+            entry.id,
+            date,
+            entry.startAt,
+            entry.endAt,
+            getTimeLabel(entry.startAt),
+            getTimeLabel(entry.endAt),
+            durationSeconds,
+            formatCsvDurationFromSeconds(durationSeconds),
+            type,
+            sectorName,
+            subTaskName,
+            entryTags,
+            entry.notes || "",
+            entryActions,
+          ];
+        });
+
+      const csvContent = [headers, ...rows]
+        .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+        .join("\n");
+
+      downloadCsv(
+        `export-suivi-temps-${new Date().toISOString().slice(0, 10)}.csv`,
+        csvContent,
+      );
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  async function buildImportPreviewFromCsv(fileName: string, csvText: string): Promise<ImportPreview> {
+    const [rawEntries, allSectors, allSubTasks, allTags] = await Promise.all([
+      db.timeEntries.toArray(),
+      db.workSectors.toArray(),
+      db.subTasks.toArray(),
+      db.tags.toArray(),
+    ]);
+
+    const sectorsById = new Map(allSectors.map((sector) => [sector.id, sector]));
+    const subTasksById = new Map(allSubTasks.map((subTask) => [subTask.id, subTask]));
+    const existingSectorNames = new Set(allSectors.map((sector) => normalizeForKey(sector.name)));
+    const existingTagNames = new Set(allTags.map((tag) => normalizeForKey(tag.name)));
+    const existingSubTaskKeys = new Set(
+      allSubTasks.map((subTask) => {
+        const sector = sectorsById.get(subTask.sectorId);
+        return `${normalizeForKey(sector?.name)}|${normalizeForKey(subTask.name)}`;
+      }),
+    );
+
+    const existingImportKeys = new Set(
+      rawEntries.map((entry) => {
+        const sector = sectorsById.get(entry.sectorId);
+        const subTask = entry.subTaskId ? subTasksById.get(entry.subTaskId) : undefined;
+        return buildImportKey({
+          date: entry.date || entry.startAt.slice(0, 10),
+          startAt: entry.startAt,
+          endAt: entry.endAt,
+          type: entry.isPause ? "Pause" : "Travail",
+          sectorName: sector?.name || "",
+          subTaskName: subTask?.name || "",
+        });
+      }),
+    );
+
+    const parsedRows = csvRowsToObjects(csvText);
+    const seenImportKeys = new Set<string>();
+    const rows: ImportCsvRow[] = parsedRows.map((row) => {
+      const startAt = parseIsoFromCsv(row, "debut_iso", "heure_debut");
+      const endAt = parseIsoFromCsv(row, "fin_iso", "heure_fin");
+      const date = row.date?.trim() || startAt.slice(0, 10);
+      const type = row.type?.trim() || "Travail";
+      const isPause = normalizeForKey(type) === "pause";
+      const sectorName = isPause ? "Pause" : row.tache?.trim() || row.secteur?.trim() || "";
+      const subTaskName = row.sous_tache?.trim() || "";
+      const notes = row.note?.trim() || row.notes?.trim() || "";
+      const tagNames = parseTagsFromCsv(row.tags ?? "");
+      const actions = parseActionsFromCsv(row.actions ?? "");
+      const durationSecondsFromCsv = Number(row.duree_secondes);
+      const durationSeconds = Number.isFinite(durationSecondsFromCsv)
+        ? Math.max(0, Math.round(durationSecondsFromCsv))
+        : Math.max(0, Math.round((new Date(endAt).getTime() - new Date(startAt).getTime()) / 1000));
+
+      const computedImportKey = buildImportKey({
+        date,
+        startAt,
+        endAt,
+        type: isPause ? "Pause" : "Travail",
+        sectorName,
+        subTaskName,
+      });
+
+      const importKey = row.import_key?.trim() || computedImportKey;
+      const errors: string[] = [];
+
+      if (!date) errors.push("Date manquante.");
+      if (!startAt || Number.isNaN(new Date(startAt).getTime())) errors.push("Début invalide.");
+      if (!endAt || Number.isNaN(new Date(endAt).getTime())) errors.push("Fin invalide.");
+      if (new Date(endAt).getTime() <= new Date(startAt).getTime()) {
+        errors.push("La fin doit être après le début.");
+      }
+      if (!isPause && !sectorName) errors.push("Tâche manquante.");
+      if (seenImportKeys.has(importKey)) errors.push("Doublon dans le fichier importé.");
+
+      const isDuplicate = existingImportKeys.has(importKey);
+      seenImportKeys.add(importKey);
+
+      return {
+        importKey,
+        originalId: row.id?.trim() || "",
+        date,
+        startAt,
+        endAt,
+        durationSeconds,
+        type: isPause ? "Pause" : "Travail",
+        isPause,
+        sectorName,
+        subTaskName,
+        tagNames,
+        notes,
+        actions,
+        isDuplicate,
+        errors,
+      };
+    });
+
+    const importableRows = rows.filter((row) => row.errors.length === 0 && !row.isDuplicate);
+    const sectorsToCreate = Array.from(
+      new Set(
+        importableRows
+          .filter((row) => !row.isPause && !existingSectorNames.has(normalizeForKey(row.sectorName)))
+          .map((row) => row.sectorName),
+      ),
+    ).sort((a, b) => a.localeCompare(b, "fr"));
+
+    const sectorNamesAfterImport = new Set([
+      ...existingSectorNames,
+      ...sectorsToCreate.map(normalizeForKey),
+    ]);
+
+    const subTasksToCreate = importableRows
+      .filter((row) => !row.isPause && row.subTaskName)
+      .filter((row) => {
+        const key = `${normalizeForKey(row.sectorName)}|${normalizeForKey(row.subTaskName)}`;
+        return sectorNamesAfterImport.has(normalizeForKey(row.sectorName)) && !existingSubTaskKeys.has(key);
+      })
+      .reduce<Array<{ sectorName: string; subTaskName: string }>>((list, row) => {
+        const key = `${normalizeForKey(row.sectorName)}|${normalizeForKey(row.subTaskName)}`;
+        const alreadyListed = list.some(
+          (item) => `${normalizeForKey(item.sectorName)}|${normalizeForKey(item.subTaskName)}` === key,
+        );
+        if (!alreadyListed) {
+          list.push({ sectorName: row.sectorName, subTaskName: row.subTaskName });
+        }
+        return list;
+      }, [])
+      .sort((a, b) => `${a.sectorName} ${a.subTaskName}`.localeCompare(`${b.sectorName} ${b.subTaskName}`, "fr"));
+
+    const tagsToCreate = Array.from(
+      new Set(
+        importableRows
+          .flatMap((row) => row.tagNames)
+          .filter((tagName) => !existingTagNames.has(normalizeForKey(tagName))),
+      ),
+    ).sort((a, b) => a.localeCompare(b, "fr"));
+
+    return {
+      fileName,
+      rows,
+      totalRows: rows.length,
+      validRows: rows.filter((row) => row.errors.length === 0).length,
+      duplicateRows: rows.filter((row) => row.isDuplicate).length,
+      invalidRows: rows.filter((row) => row.errors.length > 0).length,
+      importableRows: importableRows.length,
+      sectorsToCreate,
+      subTasksToCreate,
+      tagsToCreate,
+    };
+  }
+
+  async function handleImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) return;
+
+    setImportLoading(true);
+    setImportMessage("");
+    setImportError("");
+    setImportPreview(null);
+
+    try {
+      const csvText = await file.text();
+      const preview = await buildImportPreviewFromCsv(file.name, csvText);
+      setImportPreview(preview);
+    } catch (error) {
+      console.error(error);
+      setImportError("Impossible de lire ce fichier CSV.");
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  async function handleConfirmImportCsv() {
+    if (!importPreview) return;
+
+    const rowsToImport = importPreview.rows.filter(
+      (row) => row.errors.length === 0 && !row.isDuplicate,
+    );
+
+    if (rowsToImport.length === 0) {
+      setImportError("Aucune nouvelle ligne valide à importer.");
+      return;
+    }
+
+    setImportLoading(true);
+    setImportMessage("");
+    setImportError("");
+
+    try {
+      const now = new Date().toISOString();
+
+      await db.transaction(
+        "rw",
+        [db.workSectors, db.subTasks, db.tags, db.timeEntries, db.timeEntryTags, db.entryActions],
+        async () => {
+          const allSectors = await db.workSectors.toArray();
+          const allSubTasks = await db.subTasks.toArray();
+          const allTags = await db.tags.toArray();
+
+          const sectorsByName = new Map(allSectors.map((sector) => [normalizeForKey(sector.name), sector]));
+          const tagsByName = new Map(allTags.map((tag) => [normalizeForKey(tag.name), tag]));
+          const subTasksBySectorAndName = new Map<string, SubTask>();
+
+          if (!sectorsByName.has(normalizeForKey("Pause"))) {
+            const pauseSector: WorkSector = {
+              id: "pause",
+              name: "Pause",
+              color: "#f59e0b",
+              icon: undefined,
+              displayOrder: 999,
+              isActive: true,
+              isArchived: false,
+              createdAt: now,
+              updatedAt: now,
+            };
+
+            await db.workSectors.put(pauseSector);
+            sectorsByName.set(normalizeForKey("Pause"), pauseSector);
+          }
+
+          for (const subTask of allSubTasks) {
+            const sector = allSectors.find((item) => item.id === subTask.sectorId);
+            const key = `${normalizeForKey(sector?.name)}|${normalizeForKey(subTask.name)}`;
+            subTasksBySectorAndName.set(key, subTask);
+          }
+
+          let nextSectorDisplayOrder =
+            allSectors.length > 0 ? Math.max(...allSectors.map((sector) => sector.displayOrder)) + 1 : 1;
+
+          for (const sectorName of importPreview.sectorsToCreate) {
+            const key = normalizeForKey(sectorName);
+            if (sectorsByName.has(key)) continue;
+
+            const newSector: WorkSector = {
+              id: crypto.randomUUID(),
+              name: sectorName,
+              color: "#737373",
+              icon: undefined,
+              displayOrder: nextSectorDisplayOrder,
+              isActive: true,
+              isArchived: false,
+              createdAt: now,
+              updatedAt: now,
+            };
+
+            nextSectorDisplayOrder += 1;
+            await db.workSectors.put(newSector);
+            sectorsByName.set(key, newSector);
+          }
+
+          for (const tagName of importPreview.tagsToCreate) {
+            const key = normalizeForKey(tagName);
+            if (tagsByName.has(key)) continue;
+
+            const newTag: Tag = {
+              id: crypto.randomUUID(),
+              name: tagName,
+              color: undefined,
+              description: undefined,
+              isActive: true,
+              isArchived: false,
+              createdAt: now,
+              updatedAt: now,
+            };
+
+            await db.tags.put(newTag);
+            tagsByName.set(key, newTag);
+          }
+
+          for (const item of importPreview.subTasksToCreate) {
+            const sector = sectorsByName.get(normalizeForKey(item.sectorName));
+            if (!sector) continue;
+
+            const key = `${normalizeForKey(item.sectorName)}|${normalizeForKey(item.subTaskName)}`;
+            if (subTasksBySectorAndName.has(key)) continue;
+
+            const existingForSector = Array.from(subTasksBySectorAndName.values()).filter(
+              (subTask) => subTask.sectorId === sector.id,
+            );
+            const nextDisplayOrder =
+              existingForSector.length > 0
+                ? Math.max(...existingForSector.map((subTask) => subTask.displayOrder)) + 1
+                : 1;
+
+            const newSubTask: SubTask = {
+              id: crypto.randomUUID(),
+              sectorId: sector.id,
+              name: item.subTaskName,
+              defaultActionType: undefined,
+              displayOrder: nextDisplayOrder,
+              isActive: true,
+              isArchived: false,
+              createdAt: now,
+              updatedAt: now,
+            };
+
+            await db.subTasks.put(newSubTask);
+            subTasksBySectorAndName.set(key, newSubTask);
+          }
+
+          for (const row of rowsToImport) {
+            const sector = row.isPause
+              ? sectorsByName.get(normalizeForKey("Pause"))
+              : sectorsByName.get(normalizeForKey(row.sectorName));
+            if (!sector) continue;
+
+            const subTaskKey = `${normalizeForKey(row.sectorName)}|${normalizeForKey(row.subTaskName)}`;
+            const subTask = row.subTaskName ? subTasksBySectorAndName.get(subTaskKey) : undefined;
+            const timeEntryId = crypto.randomUUID();
+
+            await db.timeEntries.put({
+              id: timeEntryId,
+              date: row.date,
+              startAt: row.startAt,
+              endAt: row.endAt,
+              durationSeconds: row.durationSeconds,
+              sectorId: row.isPause ? "pause" : sector.id,
+              subTaskId: row.isPause ? undefined : subTask?.id,
+              energy: row.isPause ? undefined : "bon",
+              notes: row.notes || undefined,
+              source: "manual",
+              isPause: row.isPause,
+              createdAt: now,
+              updatedAt: now,
+            });
+
+            for (const tagName of row.tagNames) {
+              const tag = tagsByName.get(normalizeForKey(tagName));
+              if (!tag) continue;
+
+              await db.timeEntryTags.put({
+                id: crypto.randomUUID(),
+                timeEntryId,
+                tagId: tag.id,
+              });
+            }
+
+            for (const action of row.actions) {
+              await db.entryActions.put({
+                id: crypto.randomUUID(),
+                timeEntryId,
+                actionType: action.actionType,
+                quantity: action.quantity,
+                createdAt: now,
+                updatedAt: now,
+              });
+            }
+          }
+        },
+      );
+
+      setImportMessage(`${rowsToImport.length} nouvelle${rowsToImport.length > 1 ? "s" : ""} entrée${rowsToImport.length > 1 ? "s" : ""} importée${rowsToImport.length > 1 ? "s" : ""}.`);
+      setImportPreview(null);
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      setImportError("L’import a échoué. Aucune donnée n’a été supprimée.");
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
   async function handleResetTrackingData() {
     setResetLoading(true);
 
@@ -364,6 +1084,171 @@ export function SettingsPage() {
             Gestion simple des secteurs, des sous-tâches et des tags.
           </p>
         </div>
+
+        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-neutral-900">Export et import des données</h2>
+              <p className="mt-2 max-w-2xl text-sm text-neutral-600">
+                Exporte toutes les entrées de suivi en CSV pour les conserver, les ouvrir dans un
+                tableur ou les analyser avec une IA. L’import ajoute uniquement les nouvelles lignes
+                valides et ignore les doublons détectés.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              disabled={exportLoading}
+              className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {exportLoading ? "Export en cours..." : "Exporter en CSV"}
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-600 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Sauvegarde CSV</h3>
+              <p className="mt-2">
+                Le fichier contient une ligne par entrée, avec date, horaires, durée, tâche,
+                sous-tâche, tags, notes, actions et une clé technique pour éviter les doublons à
+                l’import.
+              </p>
+            </div>
+
+            <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Importer un CSV</h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Sélectionne un CSV exporté par l’application. Une prévisualisation sera affichée
+                avant toute écriture dans la base locale.
+              </p>
+
+              <label className="mt-4 inline-flex cursor-pointer rounded-full border border-neutral-300 bg-white px-5 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
+                {importLoading ? "Lecture en cours..." : "Choisir un fichier CSV"}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  disabled={importLoading}
+                  onChange={handleImportFileChange}
+                />
+              </label>
+            </div>
+          </div>
+
+          {importError ? (
+            <div className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+              {importError}
+            </div>
+          ) : null}
+
+          {importMessage ? (
+            <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-700 ring-1 ring-emerald-200">
+              {importMessage}
+            </div>
+          ) : null}
+
+          {importPreview ? (
+            <div className="mt-5 rounded-3xl bg-white p-4 ring-1 ring-neutral-200">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-neutral-900">Prévisualisation de l’import</h3>
+                  <p className="mt-1 text-sm text-neutral-600">Fichier : {importPreview.fileName}</p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setImportPreview(null);
+                      setImportError("");
+                      setImportMessage("");
+                    }}
+                    disabled={importLoading}
+                    className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmImportCsv}
+                    disabled={importLoading || importPreview.importableRows === 0}
+                    className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  >
+                    {importLoading ? "Import en cours..." : "Confirmer l’import"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
+                  <p className="text-sm text-neutral-500">Lignes lues</p>
+                  <p className="mt-1 text-2xl font-bold text-neutral-900">{importPreview.totalRows}</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-4 text-center ring-1 ring-emerald-200">
+                  <p className="text-sm text-emerald-700">Nouvelles entrées</p>
+                  <p className="mt-1 text-2xl font-bold text-emerald-900">{importPreview.importableRows}</p>
+                </div>
+                <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber-200">
+                  <p className="text-sm text-amber-700">Doublons ignorés</p>
+                  <p className="mt-1 text-2xl font-bold text-amber-900">{importPreview.duplicateRows}</p>
+                </div>
+                <div className="rounded-2xl bg-red-50 p-4 text-center ring-1 ring-red-200">
+                  <p className="text-sm text-red-700">Lignes invalides</p>
+                  <p className="mt-1 text-2xl font-bold text-red-900">{importPreview.invalidRows}</p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h4 className="text-sm font-semibold text-neutral-900">Tâches à créer</h4>
+                  <p className="mt-2 text-sm text-neutral-600">
+                    {importPreview.sectorsToCreate.length > 0
+                      ? importPreview.sectorsToCreate.join(", ")
+                      : "Aucune"}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h4 className="text-sm font-semibold text-neutral-900">Sous-tâches à créer</h4>
+                  <p className="mt-2 text-sm text-neutral-600">
+                    {importPreview.subTasksToCreate.length > 0
+                      ? importPreview.subTasksToCreate
+                        .slice(0, 8)
+                        .map((item) => `${item.sectorName} / ${item.subTaskName}`)
+                        .join(", ")
+                      : "Aucune"}
+                    {importPreview.subTasksToCreate.length > 8 ? "..." : ""}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h4 className="text-sm font-semibold text-neutral-900">Tags à créer</h4>
+                  <p className="mt-2 text-sm text-neutral-600">
+                    {importPreview.tagsToCreate.length > 0
+                      ? importPreview.tagsToCreate.join(", ")
+                      : "Aucun"}
+                  </p>
+                </div>
+              </div>
+
+              {importPreview.invalidRows > 0 ? (
+                <div className="mt-4 rounded-2xl bg-red-50 p-4 ring-1 ring-red-200">
+                  <h4 className="text-sm font-semibold text-red-900">Lignes invalides détectées</h4>
+                  <div className="mt-2 max-h-40 space-y-2 overflow-y-auto text-sm text-red-700">
+                    {importPreview.rows
+                      .filter((row) => row.errors.length > 0)
+                      .slice(0, 8)
+                      .map((row, index) => (
+                        <p key={`${row.importKey}-${index}`}>
+                          {row.date || "Date inconnue"} — {row.errors.join(" ")}
+                        </p>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </section>
+
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <h2 className="text-xl font-semibold text-neutral-900">Créer une sous-tâche</h2>
           <div className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
