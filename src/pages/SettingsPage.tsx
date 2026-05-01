@@ -50,6 +50,79 @@ interface ImportPreview {
   tagsToCreate: string[];
 }
 
+type ExportRange = "all" | "currentWeek" | "currentMonth" | "custom";
+
+interface ExportDateRange {
+  startDate: string;
+  endDate: string;
+  label: string;
+}
+
+interface ExportDataRow {
+  importKey: string;
+  id: string;
+  date: string;
+  startAt: string;
+  endAt: string;
+  startTime: string;
+  endTime: string;
+  durationSeconds: number;
+  durationLabel: string;
+  type: string;
+  isPause: boolean;
+  sectorName: string;
+  subTaskName: string;
+  tagNames: string[];
+  tagsLabel: string;
+  notes: string;
+  actionsLabel: string;
+}
+
+interface ExportData {
+  rows: ExportDataRow[];
+  rangeLabel: string;
+  totalSeconds: number;
+  workSeconds: number;
+  pauseSeconds: number;
+}
+
+interface JsonImportPreview {
+  fileName: string;
+  backup: unknown;
+  errors: string[];
+  workSectorsCount: number;
+  subTasksCount: number;
+  tagsCount: number;
+  timeEntriesCount: number;
+  timeEntryTagsCount: number;
+  entryActionsCount: number;
+  activeSessionsCount: number;
+  newWorkSectorsCount: number;
+  newSubTasksCount: number;
+  newTagsCount: number;
+  newTimeEntriesCount: number;
+  newTimeEntryTagsCount: number;
+  newEntryActionsCount: number;
+  newActiveSessionsCount: number;
+}
+
+type DataJournalType =
+  | "export_csv"
+  | "export_markdown"
+  | "export_prompt"
+  | "export_json"
+  | "import_csv"
+  | "import_json";
+
+interface DataJournalEntry {
+  id: string;
+  type: DataJournalType;
+  title: string;
+  description: string;
+  detail?: string;
+  createdAt: string;
+}
+
 type CsvValue = string | number | boolean | null | undefined;
 
 function escapeCsvValue(value: CsvValue): string {
@@ -82,6 +155,108 @@ function getTimeLabel(isoDate: string | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function toDateInputValue(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatDateShort(date: Date): string {
+  return date.toLocaleDateString("fr-CA", { day: "numeric", month: "long" });
+}
+
+function getCurrentMonthRange(): ExportDateRange {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), 1);
+  const end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+  return {
+    startDate: toDateInputValue(start),
+    endDate: toDateInputValue(end),
+    label: start.toLocaleDateString("fr-CA", { month: "long", year: "numeric" }),
+  };
+}
+
+function getCurrentWeekRange(): ExportDateRange {
+  const today = new Date();
+  const day = today.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const monday = new Date(today);
+  monday.setDate(today.getDate() + mondayOffset);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  return {
+    startDate: toDateInputValue(monday),
+    endDate: toDateInputValue(sunday),
+    label: `Semaine du ${formatDateShort(monday)} au ${formatDateShort(sunday)}`,
+  };
+}
+
+function formatDateLabel(dateString: string): string {
+  const date = new Date(`${dateString}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return dateString;
+
+  return date.toLocaleDateString("fr-CA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function isDateInRange(date: string, range: ExportDateRange | null): boolean {
+  if (!range) return true;
+  return date >= range.startDate && date <= range.endDate;
+}
+
+function safeArrayFromBackup(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function readBackupTables(backup: unknown): Record<string, unknown> {
+  if (!backup || typeof backup !== "object") return {};
+
+  const maybeBackup = backup as { tables?: unknown };
+  if (!maybeBackup.tables || typeof maybeBackup.tables !== "object") return {};
+
+  return maybeBackup.tables as Record<string, unknown>;
+}
+
+function downloadTextFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
 function normalizeForKey(value: CsvValue): string {
@@ -261,6 +436,55 @@ function downloadCsv(filename: string, csvContent: string) {
   URL.revokeObjectURL(url);
 }
 
+const DATA_JOURNAL_STORAGE_KEY = "outil-suivi-temps-data-journal";
+const MAX_DATA_JOURNAL_ENTRIES = 12;
+
+function loadDataJournalEntries(): DataJournalEntry[] {
+  try {
+    const rawValue = window.localStorage.getItem(DATA_JOURNAL_STORAGE_KEY);
+    if (!rawValue) return [];
+
+    const parsedValue = JSON.parse(rawValue);
+    if (!Array.isArray(parsedValue)) return [];
+
+    return parsedValue
+      .filter((entry): entry is DataJournalEntry => {
+        return (
+          entry &&
+          typeof entry === "object" &&
+          typeof entry.id === "string" &&
+          typeof entry.type === "string" &&
+          typeof entry.title === "string" &&
+          typeof entry.description === "string" &&
+          typeof entry.createdAt === "string"
+        );
+      })
+      .slice(0, MAX_DATA_JOURNAL_ENTRIES);
+  } catch {
+    return [];
+  }
+}
+
+function saveDataJournalEntries(entries: DataJournalEntry[]) {
+  window.localStorage.setItem(
+    DATA_JOURNAL_STORAGE_KEY,
+    JSON.stringify(entries.slice(0, MAX_DATA_JOURNAL_ENTRIES)),
+  );
+}
+
+function formatJournalDate(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return isoDate;
+
+  return date.toLocaleString("fr-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function SettingsPage() {
   const [sectors, setSectors] = useState<WorkSector[]>([]);
   const [subTasks, setSubTasks] = useState<SubTask[]>([]);
@@ -275,6 +499,20 @@ export function SettingsPage() {
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importMessage, setImportMessage] = useState("");
   const [importError, setImportError] = useState("");
+  const [exportRange, setExportRange] = useState<ExportRange>("all");
+  const [customExportStartDate, setCustomExportStartDate] = useState(getCurrentMonthRange().startDate);
+  const [customExportEndDate, setCustomExportEndDate] = useState(getCurrentMonthRange().endDate);
+  const [exportIncludePauses, setExportIncludePauses] = useState(true);
+  const [exportIncludeNotes, setExportIncludeNotes] = useState(true);
+  const [jsonExportLoading, setJsonExportLoading] = useState(false);
+  const [jsonImportLoading, setJsonImportLoading] = useState(false);
+  const [jsonImportPreview, setJsonImportPreview] = useState<JsonImportPreview | null>(null);
+  const [jsonImportMessage, setJsonImportMessage] = useState("");
+  const [jsonImportError, setJsonImportError] = useState("");
+  const [aiPromptCopied, setAiPromptCopied] = useState(false);
+  const [dataJournal, setDataJournal] = useState<DataJournalEntry[]>(() =>
+    loadDataJournalEntries(),
+  );
 
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
@@ -314,6 +552,27 @@ export function SettingsPage() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  function addDataJournalEntry(entry: Omit<DataJournalEntry, "id" | "createdAt">) {
+    setDataJournal((currentEntries) => {
+      const nextEntries: DataJournalEntry[] = [
+        {
+          ...entry,
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+        },
+        ...currentEntries,
+      ].slice(0, MAX_DATA_JOURNAL_ENTRIES);
+
+      saveDataJournalEntries(nextEntries);
+      return nextEntries;
+    });
+  }
+
+  function handleClearDataJournal() {
+    saveDataJournalEntries([]);
+    setDataJournal([]);
+  }
 
   async function handleCreateSector() {
     const trimmedName = draftSector.name.trim();
@@ -506,23 +765,119 @@ export function SettingsPage() {
     await loadData();
   }
 
+  function getSelectedExportRange(): ExportDateRange | null {
+    if (exportRange === "all") return null;
+    if (exportRange === "currentWeek") return getCurrentWeekRange();
+    if (exportRange === "currentMonth") return getCurrentMonthRange();
+
+    if (!customExportStartDate || !customExportEndDate) return null;
+
+    const startDate = customExportStartDate <= customExportEndDate ? customExportStartDate : customExportEndDate;
+    const endDate = customExportStartDate <= customExportEndDate ? customExportEndDate : customExportStartDate;
+
+    return {
+      startDate,
+      endDate,
+      label: `Du ${formatDateLabel(startDate)} au ${formatDateLabel(endDate)}`,
+    };
+  }
+
+  async function buildExportData(): Promise<ExportData> {
+    const range = getSelectedExportRange();
+
+    const [rawEntries, allSectors, allSubTasks, allTags, allLinks, allActions] =
+      await Promise.all([
+        db.timeEntries.toArray(),
+        db.workSectors.toArray(),
+        db.subTasks.toArray(),
+        db.tags.toArray(),
+        db.timeEntryTags.toArray(),
+        db.entryActions.toArray(),
+      ]);
+
+    const sectorsById = new Map(allSectors.map((sector) => [sector.id, sector]));
+    const subTasksById = new Map(allSubTasks.map((subTask) => [subTask.id, subTask]));
+    const tagsById = new Map(allTags.map((tag) => [tag.id, tag]));
+
+    const rows = rawEntries
+      .slice()
+      .filter((entry) => isDateInRange(entry.date || entry.startAt.slice(0, 10), range))
+      .filter((entry) => exportIncludePauses || !entry.isPause)
+      .sort((a, b) => a.startAt.localeCompare(b.startAt))
+      .map((entry): ExportDataRow => {
+        const sector = sectorsById.get(entry.sectorId);
+        const subTask = entry.subTaskId ? subTasksById.get(entry.subTaskId) : undefined;
+
+        const tagNames = allLinks
+          .filter((link) => link.timeEntryId === entry.id)
+          .map((link) => tagsById.get(link.tagId)?.name)
+          .filter(Boolean) as string[];
+
+        const actionsLabel = allActions
+          .filter((action) => action.timeEntryId === entry.id)
+          .map((action) => {
+            const actionType = action.actionType?.trim() || "Action";
+            return `${actionType}: ${action.quantity}`;
+          })
+          .join(" | ");
+
+        const durationSeconds =
+          entry.durationSeconds ??
+          Math.max(
+            0,
+            Math.round(
+              (new Date(entry.endAt).getTime() - new Date(entry.startAt).getTime()) / 1000,
+            ),
+          );
+
+        const date = entry.date || entry.startAt.slice(0, 10);
+        const type = entry.isPause ? "Pause" : "Travail";
+        const sectorName = sector?.name || "";
+        const subTaskName = subTask?.name || "";
+        const importKey = buildImportKey({
+          date,
+          startAt: entry.startAt,
+          endAt: entry.endAt,
+          type,
+          sectorName,
+          subTaskName,
+        });
+
+        return {
+          importKey,
+          id: entry.id,
+          date,
+          startAt: entry.startAt,
+          endAt: entry.endAt,
+          startTime: getTimeLabel(entry.startAt),
+          endTime: getTimeLabel(entry.endAt),
+          durationSeconds,
+          durationLabel: formatCsvDurationFromSeconds(durationSeconds),
+          type,
+          isPause: entry.isPause,
+          sectorName,
+          subTaskName,
+          tagNames,
+          tagsLabel: tagNames.join(" | "),
+          notes: exportIncludeNotes ? entry.notes || "" : "",
+          actionsLabel,
+        };
+      });
+
+    return {
+      rows,
+      rangeLabel: range?.label || "Toutes les données",
+      totalSeconds: rows.reduce((sum, row) => sum + row.durationSeconds, 0),
+      workSeconds: rows.filter((row) => !row.isPause).reduce((sum, row) => sum + row.durationSeconds, 0),
+      pauseSeconds: rows.filter((row) => row.isPause).reduce((sum, row) => sum + row.durationSeconds, 0),
+    };
+  }
+
   async function handleExportCsv() {
     setExportLoading(true);
 
     try {
-      const [rawEntries, allSectors, allSubTasks, allTags, allLinks, allActions] =
-        await Promise.all([
-          db.timeEntries.toArray(),
-          db.workSectors.toArray(),
-          db.subTasks.toArray(),
-          db.tags.toArray(),
-          db.timeEntryTags.toArray(),
-          db.entryActions.toArray(),
-        ]);
-
-      const sectorsById = new Map(allSectors.map((sector) => [sector.id, sector]));
-      const subTasksById = new Map(allSubTasks.map((subTask) => [subTask.id, subTask]));
-      const tagsById = new Map(allTags.map((tag) => [tag.id, tag]));
+      const exportData = await buildExportData();
 
       const headers = [
         "import_key",
@@ -542,67 +897,23 @@ export function SettingsPage() {
         "actions",
       ];
 
-      const rows = rawEntries
-        .slice()
-        .sort((a, b) => a.startAt.localeCompare(b.startAt))
-        .map((entry) => {
-          const sector = sectorsById.get(entry.sectorId);
-          const subTask = entry.subTaskId ? subTasksById.get(entry.subTaskId) : undefined;
-
-          const entryTags = allLinks
-            .filter((link) => link.timeEntryId === entry.id)
-            .map((link) => tagsById.get(link.tagId)?.name)
-            .filter(Boolean)
-            .join(" | ");
-
-          const entryActions = allActions
-            .filter((action) => action.timeEntryId === entry.id)
-            .map((action) => {
-              const actionType = action.actionType?.trim() || "Action";
-              return `${actionType}: ${action.quantity}`;
-            })
-            .join(" | ");
-
-          const durationSeconds =
-            entry.durationSeconds ??
-            Math.max(
-              0,
-              Math.round(
-                (new Date(entry.endAt).getTime() - new Date(entry.startAt).getTime()) / 1000,
-              ),
-            );
-
-          const date = entry.date || entry.startAt.slice(0, 10);
-          const type = entry.isPause ? "Pause" : "Travail";
-          const sectorName = sector?.name || "";
-          const subTaskName = subTask?.name || "";
-          const importKey = buildImportKey({
-            date,
-            startAt: entry.startAt,
-            endAt: entry.endAt,
-            type,
-            sectorName,
-            subTaskName,
-          });
-
-          return [
-            importKey,
-            entry.id,
-            date,
-            entry.startAt,
-            entry.endAt,
-            getTimeLabel(entry.startAt),
-            getTimeLabel(entry.endAt),
-            durationSeconds,
-            formatCsvDurationFromSeconds(durationSeconds),
-            type,
-            sectorName,
-            subTaskName,
-            entryTags,
-            entry.notes || "",
-            entryActions,
-          ];
-        });
+      const rows = exportData.rows.map((row) => [
+        row.importKey,
+        row.id,
+        row.date,
+        row.startAt,
+        row.endAt,
+        row.startTime,
+        row.endTime,
+        row.durationSeconds,
+        row.durationLabel,
+        row.type,
+        row.sectorName,
+        row.subTaskName,
+        row.tagsLabel,
+        row.notes,
+        row.actionsLabel,
+      ]);
 
       const csvContent = [headers, ...rows]
         .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
@@ -612,8 +923,369 @@ export function SettingsPage() {
         `export-suivi-temps-${new Date().toISOString().slice(0, 10)}.csv`,
         csvContent,
       );
+
+      addDataJournalEntry({
+        type: "export_csv",
+        title: "Export CSV",
+        description: `${exportData.rows.length} entrée${exportData.rows.length > 1 ? "s" : ""} exportée${exportData.rows.length > 1 ? "s" : ""}`,
+        detail: exportData.rangeLabel,
+      });
     } finally {
       setExportLoading(false);
+    }
+  }
+
+  function buildMarkdownForAi(exportData: ExportData): string {
+    const rowsByDate = new Map<string, ExportDataRow[]>();
+    const totalsByTask = new Map<string, number>();
+
+    for (const row of exportData.rows) {
+      const existingRows = rowsByDate.get(row.date) ?? [];
+      existingRows.push(row);
+      rowsByDate.set(row.date, existingRows);
+
+      const taskLabel = row.isPause ? "Pause" : row.sectorName || "Sans tâche";
+      totalsByTask.set(taskLabel, (totalsByTask.get(taskLabel) ?? 0) + row.durationSeconds);
+    }
+
+    const taskSummary = Array.from(totalsByTask.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([label, seconds]) => {
+        const percent = exportData.totalSeconds > 0 ? Math.round((seconds / exportData.totalSeconds) * 100) : 0;
+        return `- ${label} : ${formatCsvDurationFromSeconds(seconds)} (${percent}%)`;
+      });
+
+    const detailByDay = Array.from(rowsByDate.entries())
+      .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+      .flatMap(([date, rows]) => [
+        `### ${formatDateLabel(date)}`,
+        "",
+        ...rows.map((row) => {
+          const parts = [
+            `${row.startTime}–${row.endTime}`,
+            row.isPause ? "Pause" : row.sectorName || "Sans tâche",
+            row.subTaskName,
+            row.tagsLabel ? `tags : ${row.tagsLabel}` : "",
+            row.actionsLabel ? `actions : ${row.actionsLabel}` : "",
+            row.notes ? `note : ${row.notes}` : "",
+          ].filter(Boolean);
+
+          return `- ${parts.join(" — ")}`;
+        }),
+        "",
+      ]);
+
+    return [
+      `# Export IA — Suivi du temps`,
+      "",
+      `Période : ${exportData.rangeLabel}`,
+      `Export généré le : ${new Date().toLocaleString("fr-CA")}`,
+      "",
+      "## Résumé global",
+      "",
+      `- Temps total : ${formatCsvDurationFromSeconds(exportData.totalSeconds)}`,
+      `- Temps de travail : ${formatCsvDurationFromSeconds(exportData.workSeconds)}`,
+      `- Temps de pause : ${formatCsvDurationFromSeconds(exportData.pauseSeconds)}`,
+      `- Nombre d’entrées : ${exportData.rows.length}`,
+      "",
+      "## Répartition par tâche",
+      "",
+      ...(taskSummary.length > 0 ? taskSummary : ["Aucune donnée sur cette période."]),
+      "",
+      "## Détail par jour",
+      "",
+      ...(detailByDay.length > 0 ? detailByDay : ["Aucune entrée à afficher."]),
+      "## Questions utiles à poser à une IA",
+      "",
+      "- Quelles tâches prennent le plus de place dans mon mois ?",
+      "- Est-ce que mon temps est plutôt concentré ou fragmenté ?",
+      "- Quels jours semblent les plus chargés ?",
+      "- Quelles pistes d’amélioration vois-tu dans mon organisation ?",
+      "",
+    ].join("\n");
+  }
+
+  async function handleExportMarkdownForAi() {
+    setExportLoading(true);
+
+    try {
+      const exportData = await buildExportData();
+      const markdown = buildMarkdownForAi(exportData);
+
+      downloadTextFile(
+        `export-ia-suivi-temps-${new Date().toISOString().slice(0, 10)}.md`,
+        markdown,
+        "text/markdown;charset=utf-8;",
+      );
+
+      addDataJournalEntry({
+        type: "export_markdown",
+        title: "Export Markdown IA",
+        description: `${exportData.rows.length} entrée${exportData.rows.length > 1 ? "s" : ""} préparée${exportData.rows.length > 1 ? "s" : ""} pour l’analyse`,
+        detail: exportData.rangeLabel,
+      });
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  async function handleCopyAiAnalysisPrompt() {
+    setExportLoading(true);
+    setAiPromptCopied(false);
+
+    try {
+      const exportData = await buildExportData();
+      const markdown = buildMarkdownForAi(exportData);
+      const prompt = [
+        "Tu es un assistant spécialisé en organisation du travail et en analyse du temps.",
+        "Analyse les données ci-dessous avec un regard pratique, concret et bienveillant.",
+        "",
+        "Je veux que tu me donnes :",
+        "1. Une synthèse courte de mon utilisation du temps.",
+        "2. Les tâches qui prennent le plus de place.",
+        "3. Les périodes ou journées les plus chargées.",
+        "4. Les signes éventuels de fragmentation ou de dispersion.",
+        "5. Une lecture du ratio travail / pauses.",
+        "6. Trois recommandations concrètes pour mieux organiser mon temps.",
+        "7. Trois questions à me poser pour affiner l’analyse.",
+        "",
+        "Voici mes données :",
+        "",
+        markdown,
+      ].join("\n");
+
+      await copyTextToClipboard(prompt);
+      setAiPromptCopied(true);
+      window.setTimeout(() => setAiPromptCopied(false), 2500);
+
+      addDataJournalEntry({
+        type: "export_prompt",
+        title: "Prompt IA copié",
+        description: `${exportData.rows.length} entrée${exportData.rows.length > 1 ? "s" : ""} intégrée${exportData.rows.length > 1 ? "s" : ""} au prompt`,
+        detail: exportData.rangeLabel,
+      });
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  async function handleExportJsonBackup() {
+    setJsonExportLoading(true);
+
+    try {
+      const [workSectors, subTasks, allTags, timeEntries, timeEntryTags, entryActions, activeSessions] =
+        await Promise.all([
+          db.workSectors.toArray(),
+          db.subTasks.toArray(),
+          db.tags.toArray(),
+          db.timeEntries.toArray(),
+          db.timeEntryTags.toArray(),
+          db.entryActions.toArray(),
+          db.activeSessions.toArray(),
+        ]);
+
+      const backup = {
+        format: "outil-suivi-temps-backup",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        tables: {
+          workSectors,
+          subTasks,
+          tags: allTags,
+          timeEntries,
+          timeEntryTags,
+          entryActions,
+          activeSessions,
+        },
+      };
+
+      downloadTextFile(
+        `sauvegarde-suivi-temps-${new Date().toISOString().slice(0, 10)}.json`,
+        JSON.stringify(backup, null, 2),
+        "application/json;charset=utf-8;",
+      );
+
+      addDataJournalEntry({
+        type: "export_json",
+        title: "Sauvegarde JSON",
+        description: `${timeEntries.length} entrée${timeEntries.length > 1 ? "s" : ""}, ${workSectors.length} tâche${workSectors.length > 1 ? "s" : ""}, ${allTags.length} tag${allTags.length > 1 ? "s" : ""}`,
+        detail: "Sauvegarde complète de la base locale",
+      });
+    } finally {
+      setJsonExportLoading(false);
+    }
+  }
+
+  function handleDownloadCsvImportErrorReport() {
+    if (!importPreview) return;
+
+    const headers = ["ligne", "date", "debut", "fin", "tache", "erreurs"];
+    const rows = importPreview.rows
+      .map((row, index) => ({ row, lineNumber: index + 2 }))
+      .filter(({ row }) => row.errors.length > 0)
+      .map(({ row, lineNumber }) => [
+        lineNumber,
+        row.date,
+        row.startAt,
+        row.endAt,
+        row.sectorName,
+        row.errors.join(" | "),
+      ]);
+
+    const csvContent = [headers, ...rows]
+      .map((row) => row.map((value) => escapeCsvValue(value)).join(","))
+      .join("\n");
+
+    downloadCsv(
+      `rapport-erreurs-import-csv-${new Date().toISOString().slice(0, 10)}.csv`,
+      csvContent,
+    );
+  }
+
+  async function buildJsonImportPreview(fileName: string, backup: unknown): Promise<JsonImportPreview> {
+    const tables = readBackupTables(backup);
+    const errors: string[] = [];
+
+    if (!backup || typeof backup !== "object") {
+      errors.push("Le fichier JSON n’a pas une structure valide.");
+    }
+
+    const maybeBackup = backup as { format?: unknown; version?: unknown };
+    if (maybeBackup.format !== "outil-suivi-temps-backup") {
+      errors.push("Ce fichier ne semble pas être une sauvegarde exportée par l’application.");
+    }
+
+    const workSectors = safeArrayFromBackup(tables.workSectors);
+    const backupSubTasks = safeArrayFromBackup(tables.subTasks);
+    const backupTags = safeArrayFromBackup(tables.tags);
+    const timeEntries = safeArrayFromBackup(tables.timeEntries);
+    const timeEntryTags = safeArrayFromBackup(tables.timeEntryTags);
+    const entryActions = safeArrayFromBackup(tables.entryActions);
+    const activeSessions = safeArrayFromBackup(tables.activeSessions);
+
+    const [existingSectors, existingSubTasks, existingTags, existingEntries, existingLinks, existingActions, existingSessions] =
+      await Promise.all([
+        db.workSectors.toArray(),
+        db.subTasks.toArray(),
+        db.tags.toArray(),
+        db.timeEntries.toArray(),
+        db.timeEntryTags.toArray(),
+        db.entryActions.toArray(),
+        db.activeSessions.toArray(),
+      ]);
+
+    const countNewItems = (items: any[], existingItems: Array<{ id: string }>) => {
+      const existingIds = new Set(existingItems.map((item) => item.id));
+      return items.filter((item) => item?.id && !existingIds.has(item.id)).length;
+    };
+
+    return {
+      fileName,
+      backup,
+      errors,
+      workSectorsCount: workSectors.length,
+      subTasksCount: backupSubTasks.length,
+      tagsCount: backupTags.length,
+      timeEntriesCount: timeEntries.length,
+      timeEntryTagsCount: timeEntryTags.length,
+      entryActionsCount: entryActions.length,
+      activeSessionsCount: activeSessions.length,
+      newWorkSectorsCount: countNewItems(workSectors, existingSectors),
+      newSubTasksCount: countNewItems(backupSubTasks, existingSubTasks),
+      newTagsCount: countNewItems(backupTags, existingTags),
+      newTimeEntriesCount: countNewItems(timeEntries, existingEntries),
+      newTimeEntryTagsCount: countNewItems(timeEntryTags, existingLinks),
+      newEntryActionsCount: countNewItems(entryActions, existingActions),
+      newActiveSessionsCount: countNewItems(activeSessions, existingSessions),
+    };
+  }
+
+  async function handleJsonImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) return;
+
+    setJsonImportLoading(true);
+    setJsonImportMessage("");
+    setJsonImportError("");
+    setJsonImportPreview(null);
+
+    try {
+      const jsonText = await file.text();
+      const parsedBackup = JSON.parse(jsonText) as unknown;
+      const preview = await buildJsonImportPreview(file.name, parsedBackup);
+      setJsonImportPreview(preview);
+    } catch (error) {
+      console.error(error);
+      setJsonImportError("Impossible de lire ce fichier JSON.");
+    } finally {
+      setJsonImportLoading(false);
+    }
+  }
+
+  async function handleConfirmImportJson() {
+    if (!jsonImportPreview || jsonImportPreview.errors.length > 0) return;
+
+    setJsonImportLoading(true);
+    setJsonImportMessage("");
+    setJsonImportError("");
+
+    try {
+      const tables = readBackupTables(jsonImportPreview.backup);
+      const workSectors = safeArrayFromBackup(tables.workSectors);
+      const backupSubTasks = safeArrayFromBackup(tables.subTasks);
+      const backupTags = safeArrayFromBackup(tables.tags);
+      const timeEntries = safeArrayFromBackup(tables.timeEntries);
+      const timeEntryTags = safeArrayFromBackup(tables.timeEntryTags);
+      const entryActions = safeArrayFromBackup(tables.entryActions);
+      const activeSessions = safeArrayFromBackup(tables.activeSessions);
+
+      await db.transaction(
+        "rw",
+        [db.workSectors, db.subTasks, db.tags, db.timeEntries, db.timeEntryTags, db.entryActions, db.activeSessions],
+        async () => {
+          const existingSectors = new Set((await db.workSectors.toArray()).map((item) => item.id));
+          const existingSubTasks = new Set((await db.subTasks.toArray()).map((item) => item.id));
+          const existingTags = new Set((await db.tags.toArray()).map((item) => item.id));
+          const existingEntries = new Set((await db.timeEntries.toArray()).map((item) => item.id));
+          const existingLinks = new Set((await db.timeEntryTags.toArray()).map((item) => item.id));
+          const existingActions = new Set((await db.entryActions.toArray()).map((item) => item.id));
+          const existingSessions = new Set((await db.activeSessions.toArray()).map((item) => item.id));
+
+          await db.workSectors.bulkPut(workSectors.filter((item) => item?.id && !existingSectors.has(item.id)) as WorkSector[]);
+          await db.subTasks.bulkPut(backupSubTasks.filter((item) => item?.id && !existingSubTasks.has(item.id)) as SubTask[]);
+          await db.tags.bulkPut(backupTags.filter((item) => item?.id && !existingTags.has(item.id)) as Tag[]);
+          await db.timeEntries.bulkPut(timeEntries.filter((item) => item?.id && !existingEntries.has(item.id)) as any[]);
+          await db.timeEntryTags.bulkPut(timeEntryTags.filter((item) => item?.id && !existingLinks.has(item.id)) as any[]);
+          await db.entryActions.bulkPut(entryActions.filter((item) => item?.id && !existingActions.has(item.id)) as any[]);
+          await db.activeSessions.bulkPut(activeSessions.filter((item) => item?.id && !existingSessions.has(item.id)) as any[]);
+        },
+      );
+
+      const totalImported =
+        jsonImportPreview.newWorkSectorsCount +
+        jsonImportPreview.newSubTasksCount +
+        jsonImportPreview.newTagsCount +
+        jsonImportPreview.newTimeEntriesCount +
+        jsonImportPreview.newTimeEntryTagsCount +
+        jsonImportPreview.newEntryActionsCount +
+        jsonImportPreview.newActiveSessionsCount;
+
+      setJsonImportMessage(`${totalImported} élément${totalImported > 1 ? "s" : ""} ajouté${totalImported > 1 ? "s" : ""} depuis la sauvegarde JSON.`);
+      addDataJournalEntry({
+        type: "import_json",
+        title: "Import JSON",
+        description: `${totalImported} élément${totalImported > 1 ? "s" : ""} ajouté${totalImported > 1 ? "s" : ""}`,
+        detail: jsonImportPreview.fileName,
+      });
+      setJsonImportPreview(null);
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      setJsonImportError("L’import JSON a échoué. Aucune donnée n’a été supprimée.");
+    } finally {
+      setJsonImportLoading(false);
     }
   }
 
@@ -969,6 +1641,12 @@ export function SettingsPage() {
       );
 
       setImportMessage(`${rowsToImport.length} nouvelle${rowsToImport.length > 1 ? "s" : ""} entrée${rowsToImport.length > 1 ? "s" : ""} importée${rowsToImport.length > 1 ? "s" : ""}.`);
+      addDataJournalEntry({
+        type: "import_csv",
+        title: "Import CSV",
+        description: `${rowsToImport.length} entrée${rowsToImport.length > 1 ? "s" : ""} ajoutée${rowsToImport.length > 1 ? "s" : ""}`,
+        detail: `${importPreview.fileName} — ${importPreview.duplicateRows} doublon${importPreview.duplicateRows > 1 ? "s" : ""} ignoré${importPreview.duplicateRows > 1 ? "s" : ""}`,
+      });
       setImportPreview(null);
       await loadData();
     } catch (error) {
@@ -1085,56 +1763,561 @@ export function SettingsPage() {
           </p>
         </div>
 
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-neutral-900">Export et import des données</h2>
-              <p className="mt-2 max-w-2xl text-sm text-neutral-600">
-                Exporte toutes les entrées de suivi en CSV pour les conserver, les ouvrir dans un
-                tableur ou les analyser avec une IA. L’import ajoute uniquement les nouvelles lignes
-                valides et ignore les doublons détectés.
+              <h2 className="text-xl font-semibold text-neutral-900">Modifier les tâches, sous-tâches et tags</h2>
+              <p className="mt-2 max-w-3xl text-sm text-neutral-600">
+                Modifie rapidement les éléments existants. Les cartes sont condensées pour éviter une longue ligne par élément.
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              disabled={exportLoading}
-              className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {exportLoading ? "Export en cours..." : "Exporter en CSV"}
-            </button>
+            {!loading ? (
+              <div className="flex flex-wrap gap-2 text-xs font-medium text-neutral-600">
+                <span className="rounded-full bg-neutral-100 px-3 py-1">{sectors.length} tâche{sectors.length > 1 ? "s" : ""}</span>
+                <span className="rounded-full bg-neutral-100 px-3 py-1">{subTasks.length} sous-tâche{subTasks.length > 1 ? "s" : ""}</span>
+                <span className="rounded-full bg-neutral-100 px-3 py-1">{tags.length} tag{tags.length > 1 ? "s" : ""}</span>
+              </div>
+            ) : null}
           </div>
 
-          <div className="mt-5 grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-600 ring-1 ring-neutral-200">
-              <h3 className="text-base font-semibold text-neutral-900">Sauvegarde CSV</h3>
-              <p className="mt-2">
-                Le fichier contient une ligne par entrée, avec date, horaires, durée, tâche,
-                sous-tâche, tags, notes, actions et une clé technique pour éviter les doublons à
-                l’import.
-              </p>
+          {loading ? (
+            <p className="text-sm text-neutral-600">Chargement…</p>
+          ) : (
+            <div className="grid gap-5 xl:grid-cols-3">
+              <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                <h3 className="text-base font-semibold text-neutral-900">Tâches</h3>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  {sectors.map((sector) => {
+                    const isPauseSector = sector.id === "pause";
+
+                    return (
+                      <div key={sector.id} className="rounded-2xl bg-white p-3 ring-1 ring-neutral-200">
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="color"
+                            value={sector.color}
+                            disabled={isPauseSector}
+                            onChange={(e) =>
+                              void handleUpdateSector(sector, { color: e.target.value })
+                            }
+                            className="h-10 w-12 shrink-0 rounded-xl border border-neutral-300 bg-white px-1 py-1 disabled:bg-neutral-100"
+                            aria-label="Couleur de la tâche"
+                          />
+
+                          <input
+                            type="text"
+                            value={sector.name}
+                            disabled={isPauseSector}
+                            onChange={(e) =>
+                              void handleUpdateSector(sector, { name: e.target.value })
+                            }
+                            className="min-w-0 flex-1 rounded-2xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
+                          />
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${sector.isActive
+                                ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                                : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
+                              }`}
+                          >
+                            {sector.isActive ? "Actif" : "Inactif"}
+                          </span>
+
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${sector.isArchived
+                                ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                                : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
+                              }`}
+                          >
+                            {sector.isArchived ? "Archivé" : "Visible"}
+                          </span>
+
+                          {!isPauseSector ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => void handleToggleActiveSector(sector)}
+                                className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                              >
+                                {sector.isActive ? "Désactiver" : "Activer"}
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => void handleToggleArchivedSector(sector)}
+                                className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                              >
+                                {sector.isArchived ? "Désarchiver" : "Archiver"}
+                              </button>
+                            </>
+                          ) : (
+                            <span className="rounded-full bg-neutral-900 px-3 py-1 text-xs font-medium text-white">
+                              Système
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                <h3 className="text-base font-semibold text-neutral-900">Sous-tâches</h3>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  {subTasks.map((subTask) => {
+                    const parentSector = sectors.find((sector) => sector.id === subTask.sectorId);
+
+                    return (
+                      <div key={subTask.id} className="rounded-2xl bg-white p-3 ring-1 ring-neutral-200">
+                        <div className="grid gap-2">
+                          <input
+                            type="text"
+                            value={subTask.name}
+                            onChange={(e) => void handleUpdateSubTask(subTask, { name: e.target.value })}
+                            className="w-full rounded-2xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none"
+                          />
+
+                          <select
+                            value={subTask.sectorId}
+                            onChange={(e) =>
+                              void handleUpdateSubTask(subTask, { sectorId: e.target.value })
+                            }
+                            className="w-full rounded-2xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none"
+                          >
+                            {sectors
+                              .filter((sector) => sector.id !== "pause")
+                              .map((sector) => (
+                                <option key={sector.id} value={sector.id}>
+                                  {sector.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+
+                        {parentSector ? (
+                          <p className="mt-2 text-xs text-neutral-500">Tâche : {parentSector.name}</p>
+                        ) : null}
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${subTask.isActive
+                                ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                                : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
+                              }`}
+                          >
+                            {subTask.isActive ? "Actif" : "Inactif"}
+                          </span>
+
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${subTask.isArchived
+                                ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                                : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
+                              }`}
+                          >
+                            {subTask.isArchived ? "Archivé" : "Visible"}
+                          </span>
+
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleActiveSubTask(subTask)}
+                            className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                          >
+                            {subTask.isActive ? "Désactiver" : "Activer"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => void handleToggleArchivedSubTask(subTask)}
+                            className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                          >
+                            {subTask.isArchived ? "Désarchiver" : "Archiver"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                <h3 className="text-base font-semibold text-neutral-900">Tags</h3>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  {tags.map((tag) => (
+                    <div key={tag.id} className="rounded-2xl bg-white p-3 ring-1 ring-neutral-200">
+                      <input
+                        type="text"
+                        value={tag.name}
+                        onChange={(e) => void handleUpdateTag(tag, e.target.value)}
+                        className="w-full rounded-2xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 outline-none"
+                      />
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${tag.isActive
+                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                              : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
+                            }`}
+                        >
+                          {tag.isActive ? "Actif" : "Inactif"}
+                        </span>
+
+                        <span
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${tag.isArchived
+                              ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                              : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
+                            }`}
+                        >
+                          {tag.isArchived ? "Archivé" : "Visible"}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleActiveTag(tag)}
+                          className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                        >
+                          {tag.isActive ? "Désactiver" : "Activer"}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void handleToggleArchivedTag(tag)}
+                          className="rounded-full border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50"
+                        >
+                          {tag.isArchived ? "Désarchiver" : "Archiver"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div>
+            <h2 className="text-xl font-semibold text-neutral-900">Créer de nouveaux éléments</h2>
+            <p className="mt-2 max-w-3xl text-sm text-neutral-600">
+              Ajoute une nouvelle tâche, une sous-tâche ou un tag depuis une seule zone.
+            </p>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Nouvelle tâche</h3>
+              <div className="mt-4 grid gap-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
+                  <input
+                    type="text"
+                    value={draftSector.name}
+                    onChange={(e) =>
+                      setDraftSector((prev) => ({ ...prev, name: e.target.value }))
+                    }
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Couleur</label>
+                  <input
+                    type="color"
+                    value={draftSector.color}
+                    onChange={(e) =>
+                      setDraftSector((prev) => ({ ...prev, color: e.target.value }))
+                    }
+                    className="h-12 w-full rounded-2xl border border-neutral-300 bg-white px-2 py-2"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCreateSector}
+                  disabled={saving || !draftSector.name.trim()}
+                  className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  Ajouter la tâche
+                </button>
+              </div>
             </div>
 
-            <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
-              <h3 className="text-base font-semibold text-neutral-900">Importer un CSV</h3>
-              <p className="mt-2 text-sm text-neutral-600">
-                Sélectionne un CSV exporté par l’application. Une prévisualisation sera affichée
-                avant toute écriture dans la base locale.
-              </p>
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Nouvelle sous-tâche</h3>
+              <div className="mt-4 grid gap-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Tâche</label>
+                  <select
+                    value={draftSubTask.sectorId}
+                    onChange={(e) =>
+                      setDraftSubTask((prev) => ({ ...prev, sectorId: e.target.value }))
+                    }
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                  >
+                    {sectors
+                      .filter((sector) => sector.id !== "pause")
+                      .map((sector) => (
+                        <option key={sector.id} value={sector.id}>
+                          {sector.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
 
-              <label className="mt-4 inline-flex cursor-pointer rounded-full border border-neutral-300 bg-white px-5 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
-                {importLoading ? "Lecture en cours..." : "Choisir un fichier CSV"}
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  className="hidden"
-                  disabled={importLoading}
-                  onChange={handleImportFileChange}
-                />
-              </label>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
+                  <input
+                    type="text"
+                    value={draftSubTask.name}
+                    onChange={(e) =>
+                      setDraftSubTask((prev) => ({ ...prev, name: e.target.value }))
+                    }
+                    placeholder="Ex. appels entrants, emails, classement"
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCreateSubTask}
+                  disabled={saving || !draftSubTask.name.trim() || !draftSubTask.sectorId}
+                  className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  Ajouter la sous-tâche
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Nouveau tag</h3>
+              <div className="mt-4 grid gap-3">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
+                  <input
+                    type="text"
+                    value={draftTag.name}
+                    onChange={(e) => setDraftTag({ name: e.target.value })}
+                    placeholder="Ex. urgent, client, suivi"
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCreateTag}
+                  disabled={saving || !draftTag.name.trim()}
+                  className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  Ajouter le tag
+                </button>
+              </div>
             </div>
           </div>
+        </section>
+
+        <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div>
+            <h2 className="text-xl font-semibold text-neutral-900">Données et sauvegardes</h2>
+            <p className="mt-2 max-w-3xl text-sm text-neutral-600">
+              Exporte tes données pour les analyser, crée une sauvegarde complète, ou importe des
+              fichiers existants sans supprimer tes données locales.
+            </p>
+          </div>
+
+          <div className="rounded-3xl bg-neutral-50 p-5 ring-1 ring-neutral-200">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-neutral-900">Export pour analyse</h3>
+                <p className="mt-1 max-w-2xl text-sm text-neutral-600">
+                  Choisis la période et le niveau de détail, puis exporte en CSV pour un tableur
+                  ou en Markdown pour une analyse par IA.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-end">
+              <div>
+                <label className="mb-2 block text-sm font-medium text-neutral-700">Période à exporter</label>
+                <select
+                  value={exportRange}
+                  onChange={(event) => setExportRange(event.target.value as ExportRange)}
+                  className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                >
+                  <option value="all">Toutes les données</option>
+                  <option value="currentWeek">Semaine en cours</option>
+                  <option value="currentMonth">Mois en cours</option>
+                  <option value="custom">Dates personnalisées</option>
+                </select>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Du</label>
+                  <input
+                    type="date"
+                    value={customExportStartDate}
+                    disabled={exportRange !== "custom"}
+                    onChange={(event) => setCustomExportStartDate(event.target.value)}
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                  />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-neutral-700">Au</label>
+                  <input
+                    type="date"
+                    value={customExportEndDate}
+                    disabled={exportRange !== "custom"}
+                    onChange={(event) => setCustomExportEndDate(event.target.value)}
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 rounded-2xl bg-white p-3 ring-1 ring-neutral-200">
+                <label className="flex items-center gap-2 text-sm text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={exportIncludePauses}
+                    onChange={(event) => setExportIncludePauses(event.target.checked)}
+                    className="h-4 w-4 rounded border-neutral-300"
+                  />
+                  Inclure les pauses
+                </label>
+                <label className="flex items-center gap-2 text-sm text-neutral-700">
+                  <input
+                    type="checkbox"
+                    checked={exportIncludeNotes}
+                    onChange={(event) => setExportIncludeNotes(event.target.checked)}
+                    className="h-4 w-4 rounded border-neutral-300"
+                  />
+                  Inclure les notes
+                </label>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-3">
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
+                <h4 className="text-base font-semibold text-neutral-900">CSV pour tableur</h4>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Une ligne par entrée, avec date, horaires, durée, tâche, sous-tâche, tags,
+                  notes, actions et une clé technique pour éviter les doublons.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleExportCsv}
+                  disabled={exportLoading}
+                  className="mt-4 rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {exportLoading ? "Export en cours..." : "Exporter en CSV"}
+                </button>
+              </div>
+
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
+                <h4 className="text-base font-semibold text-neutral-900">Markdown pour IA</h4>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Génère un fichier lisible avec résumé global, répartition par tâche et détail
+                  par jour, prêt à transmettre à une IA.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleExportMarkdownForAi}
+                  disabled={exportLoading}
+                  className="mt-4 rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {exportLoading ? "Export en cours..." : "Exporter pour IA"}
+                </button>
+              </div>
+
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
+                <h4 className="text-base font-semibold text-neutral-900">Prompt prêt à copier</h4>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Copie un texte complet avec les données et les consignes d’analyse, prêt à coller
+                  directement dans ChatGPT.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleCopyAiAnalysisPrompt}
+                  disabled={exportLoading}
+                  className="mt-4 rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  {exportLoading ? "Préparation..." : aiPromptCopied ? "Prompt copié" : "Copier le prompt IA"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-neutral-50 p-5 ring-1 ring-neutral-200">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-neutral-900">Sauvegarde complète</h3>
+                <p className="mt-1 max-w-2xl text-sm text-neutral-600">
+                  Le JSON sert à conserver une copie complète de l’application : tâches,
+                  sous-tâches, tags, entrées, liens, actions et sessions en cours.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleExportJsonBackup}
+                disabled={jsonExportLoading}
+                className="shrink-0 rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {jsonExportLoading ? "Sauvegarde en cours..." : "Exporter en JSON"}
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-neutral-50 p-5 ring-1 ring-neutral-200">
+            <div>
+              <h3 className="text-lg font-semibold text-neutral-900">Import / restauration</h3>
+              <p className="mt-1 max-w-3xl text-sm text-neutral-600">
+                Les imports sont sécurisés : une prévisualisation est affichée avant confirmation,
+                les doublons sont ignorés et aucune donnée existante n’est supprimée.
+              </p>
+            </div>
+
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
+                <h4 className="text-base font-semibold text-neutral-900">Importer un CSV</h4>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Ajoute des entrées depuis un fichier CSV exporté par l’application. Les tâches,
+                  sous-tâches et tags manquants peuvent être créés automatiquement.
+                </p>
+
+                <label className="mt-4 inline-flex cursor-pointer rounded-full border border-neutral-300 bg-white px-5 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
+                  {importLoading ? "Lecture en cours..." : "Choisir un fichier CSV"}
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    disabled={importLoading}
+                    onChange={handleImportFileChange}
+                  />
+                </label>
+              </div>
+
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
+                <h4 className="text-base font-semibold text-neutral-900">Importer une sauvegarde JSON</h4>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Restaure une sauvegarde complète en ajoutant seulement les éléments absents de
+                  la base locale.
+                </p>
+
+                <label className="mt-4 inline-flex cursor-pointer rounded-full border border-neutral-300 bg-white px-5 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
+                  {jsonImportLoading ? "Lecture en cours..." : "Choisir un fichier JSON"}
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    disabled={jsonImportLoading}
+                    onChange={handleJsonImportFileChange}
+                  />
+                </label>
+              </div>
+            </div>
 
           {importError ? (
             <div className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
@@ -1148,15 +2331,36 @@ export function SettingsPage() {
             </div>
           ) : null}
 
+          {jsonImportError ? (
+            <div className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+              {jsonImportError}
+            </div>
+          ) : null}
+
+          {jsonImportMessage ? (
+            <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-700 ring-1 ring-emerald-200">
+              {jsonImportMessage}
+            </div>
+          ) : null}
+
           {importPreview ? (
             <div className="mt-5 rounded-3xl bg-white p-4 ring-1 ring-neutral-200">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-neutral-900">Prévisualisation de l’import</h3>
+                  <h3 className="text-lg font-semibold text-neutral-900">Prévisualisation de l’import CSV</h3>
                   <p className="mt-1 text-sm text-neutral-600">Fichier : {importPreview.fileName}</p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
+                  {importPreview.invalidRows > 0 ? (
+                    <button
+                      type="button"
+                      onClick={handleDownloadCsvImportErrorReport}
+                      className="rounded-full border border-red-300 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+                    >
+                      Télécharger le rapport d’erreurs
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => {
@@ -1235,11 +2439,12 @@ export function SettingsPage() {
                   <h4 className="text-sm font-semibold text-red-900">Lignes invalides détectées</h4>
                   <div className="mt-2 max-h-40 space-y-2 overflow-y-auto text-sm text-red-700">
                     {importPreview.rows
-                      .filter((row) => row.errors.length > 0)
-                      .slice(0, 8)
-                      .map((row, index) => (
-                        <p key={`${row.importKey}-${index}`}>
-                          {row.date || "Date inconnue"} — {row.errors.join(" ")}
+                      .map((row, index) => ({ row, lineNumber: index + 2 }))
+                      .filter(({ row }) => row.errors.length > 0)
+                      .slice(0, 12)
+                      .map(({ row, lineNumber }) => (
+                        <p key={`${row.importKey}-${lineNumber}`}>
+                          Ligne {lineNumber} — {row.date || "Date inconnue"} — {row.errors.join(" ")}
                         </p>
                       ))}
                   </div>
@@ -1247,387 +2452,121 @@ export function SettingsPage() {
               ) : null}
             </div>
           ) : null}
-        </section>
 
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <h2 className="text-xl font-semibold text-neutral-900">Créer une sous-tâche</h2>
-          <div className="mt-5 grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700">
-                Secteur
-              </label>
-              <select
-                value={draftSubTask.sectorId}
-                onChange={(e) =>
-                  setDraftSubTask((prev) => ({ ...prev, sectorId: e.target.value }))
-                }
-                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-              >
-                {sectors
-                  .filter((sector) => sector.id !== "pause")
-                  .map((sector) => (
-                    <option key={sector.id} value={sector.id}>
-                      {sector.name}
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
-              <input
-                type="text"
-                value={draftSubTask.name}
-                onChange={(e) =>
-                  setDraftSubTask((prev) => ({ ...prev, name: e.target.value }))
-                }
-                placeholder="Ex. appels entrants, emails, classement"
-                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleCreateSubTask}
-              disabled={saving || !draftSubTask.name.trim() || !draftSubTask.sectorId}
-              className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
-            >
-              Ajouter
-            </button>
-          </div>
-        </section>
-
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <h2 className="text-xl font-semibold text-neutral-900">Créer un secteur</h2>
-          <div className="mt-5 grid gap-4 md:grid-cols-[1fr_180px_auto] md:items-end">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
-              <input
-                type="text"
-                value={draftSector.name}
-                onChange={(e) =>
-                  setDraftSector((prev) => ({ ...prev, name: e.target.value }))
-                }
-                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700">
-                Couleur
-              </label>
-              <input
-                type="color"
-                value={draftSector.color}
-                onChange={(e) =>
-                  setDraftSector((prev) => ({ ...prev, color: e.target.value }))
-                }
-                className="h-12 w-full rounded-2xl border border-neutral-300 bg-white px-2 py-2"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleCreateSector}
-              disabled={saving || !draftSector.name.trim()}
-              className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
-            >
-              Ajouter
-            </button>
-          </div>
-        </section>
-
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <h2 className="text-xl font-semibold text-neutral-900">Créer un tag</h2>
-          <div className="mt-5 grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
-            <div>
-              <label className="mb-2 block text-sm font-medium text-neutral-700">Nom</label>
-              <input
-                type="text"
-                value={draftTag.name}
-                onChange={(e) => setDraftTag({ name: e.target.value })}
-                placeholder="Ex. urgent, client, suivi"
-                className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleCreateTag}
-              disabled={saving || !draftTag.name.trim()}
-              className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
-            >
-              Ajouter
-            </button>
-          </div>
-        </section>
-
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-neutral-900">Secteurs existants</h2>
-            {!loading && (
-              <span className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600">
-                {sectors.length} secteur{sectors.length > 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-
-          {loading ? (
-            <p className="mt-4 text-sm text-neutral-600">Chargement…</p>
-          ) : (
-            <div className="mt-5 space-y-4">
-              {sectors.map((sector) => {
-                const isPauseSector = sector.id === "pause";
-
-                return (
-                  <div
-                    key={sector.id}
-                    className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                  >
-                    <div className="grid gap-4 lg:grid-cols-[1fr_180px_auto] lg:items-start">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-neutral-700">
-                          Nom
-                        </label>
-                        <input
-                          type="text"
-                          value={sector.name}
-                          disabled={isPauseSector}
-                          onChange={(e) =>
-                            void handleUpdateSector(sector, { name: e.target.value })
-                          }
-                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none disabled:bg-neutral-100"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-neutral-700">
-                          Couleur
-                        </label>
-                        <input
-                          type="color"
-                          value={sector.color}
-                          disabled={isPauseSector}
-                          onChange={(e) =>
-                            void handleUpdateSector(sector, { color: e.target.value })
-                          }
-                          className="h-12 w-full rounded-2xl border border-neutral-300 bg-white px-2 py-2 disabled:bg-neutral-100"
-                        />
-                      </div>
-
-                      <div className="flex flex-wrap gap-2 lg:justify-end">
-                        {!isPauseSector ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleActiveSector(sector)}
-                              className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                            >
-                              {sector.isActive ? "Désactiver" : "Activer"}
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleArchivedSector(sector)}
-                              className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                            >
-                              {sector.isArchived ? "Désarchiver" : "Archiver"}
-                            </button>
-                          </>
-                        ) : (
-                          <span className="rounded-full bg-neutral-900 px-3 py-1 text-xs font-medium text-white">
-                            Secteur système
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-neutral-900">Sous-tâches existantes</h2>
-            {!loading && (
-              <span className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600">
-                {subTasks.length} sous-tâche{subTasks.length > 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-
-          {loading ? (
-            <p className="mt-4 text-sm text-neutral-600">Chargement…</p>
-          ) : (
-            <div className="mt-5 space-y-4">
-              {subTasks.map((subTask) => {
-                const parentSector = sectors.find((sector) => sector.id === subTask.sectorId);
-
-                return (
-                  <div
-                    key={subTask.id}
-                    className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                  >
-                    <div className="grid gap-4 lg:grid-cols-[1fr_1fr_auto] lg:items-start">
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-neutral-700">
-                          Nom
-                        </label>
-                        <input
-                          type="text"
-                          value={subTask.name}
-                          onChange={(e) => void handleUpdateSubTask(subTask, { name: e.target.value })}
-                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="mb-2 block text-sm font-medium text-neutral-700">
-                          Secteur
-                        </label>
-                        <select
-                          value={subTask.sectorId}
-                          onChange={(e) =>
-                            void handleUpdateSubTask(subTask, { sectorId: e.target.value })
-                          }
-                          className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-                        >
-                          {sectors
-                            .filter((sector) => sector.id !== "pause")
-                            .map((sector) => (
-                              <option key={sector.id} value={sector.id}>
-                                {sector.name}
-                              </option>
-                            ))}
-                        </select>
-
-                        {parentSector ? (
-                          <p className="mt-2 text-xs text-neutral-500">
-                            Secteur actuel : {parentSector.name}
-                          </p>
-                        ) : null}
-                      </div>
-
-                      <div className="flex flex-wrap gap-2 lg:justify-end">
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleActiveSubTask(subTask)}
-                          className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                        >
-                          {subTask.isActive ? "Désactiver" : "Activer"}
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleArchivedSubTask(subTask)}
-                          className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                        >
-                          {subTask.isArchived ? "Désarchiver" : "Archiver"}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-medium ${subTask.isActive
-                            ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                            : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
-                          }`}
-                      >
-                        {subTask.isActive ? "Actif" : "Inactif"}
-                      </span>
-
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-medium ${subTask.isArchived
-                            ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
-                            : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
-                          }`}
-                      >
-                        {subTask.isArchived ? "Archivé" : "Visible"}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <div className="flex items-center justify-between gap-4">
-            <h2 className="text-xl font-semibold text-neutral-900">Tags existants</h2>
-            {!loading && (
-              <span className="rounded-full bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-600">
-                {tags.length} tag{tags.length > 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-
-          {loading ? (
-            <p className="mt-4 text-sm text-neutral-600">Chargement…</p>
-          ) : (
-            <div className="mt-5 space-y-4">
-              {tags.map((tag) => (
-                <div
-                  key={tag.id}
-                  className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                >
-                  <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-start">
-                    <div>
-                      <label className="mb-2 block text-sm font-medium text-neutral-700">
-                        Nom
-                      </label>
-                      <input
-                        type="text"
-                        value={tag.name}
-                        onChange={(e) => void handleUpdateTag(tag, e.target.value)}
-                        className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
-                      />
-
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-medium ${tag.isActive
-                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                              : "bg-neutral-100 text-neutral-600 ring-1 ring-neutral-200"
-                            }`}
-                        >
-                          {tag.isActive ? "Actif" : "Inactif"}
-                        </span>
-
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-medium ${tag.isArchived
-                              ? "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
-                              : "bg-sky-50 text-sky-700 ring-1 ring-sky-200"
-                            }`}
-                        >
-                          {tag.isArchived ? "Archivé" : "Visible"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 lg:justify-end">
-                      <button
-                        type="button"
-                        onClick={() => void handleToggleActiveTag(tag)}
-                        className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                      >
-                        {tag.isActive ? "Désactiver" : "Activer"}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => void handleToggleArchivedTag(tag)}
-                        className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                      >
-                        {tag.isArchived ? "Désarchiver" : "Archiver"}
-                      </button>
-                    </div>
-                  </div>
+          {jsonImportPreview ? (
+            <div className="mt-5 rounded-3xl bg-white p-4 ring-1 ring-neutral-200">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-neutral-900">Prévisualisation de l’import JSON</h3>
+                  <p className="mt-1 text-sm text-neutral-600">Fichier : {jsonImportPreview.fileName}</p>
                 </div>
-              ))}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setJsonImportPreview(null);
+                      setJsonImportError("");
+                      setJsonImportMessage("");
+                    }}
+                    disabled={jsonImportLoading}
+                    className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmImportJson}
+                    disabled={jsonImportLoading || jsonImportPreview.errors.length > 0}
+                    className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  >
+                    {jsonImportLoading ? "Import en cours..." : "Confirmer l’import JSON"}
+                  </button>
+                </div>
+              </div>
+
+              {jsonImportPreview.errors.length > 0 ? (
+                <div className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+                  {jsonImportPreview.errors.join(" ")}
+                </div>
+              ) : null}
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
+                  <p className="text-sm text-neutral-500">Entrées de temps</p>
+                  <p className="mt-1 text-2xl font-bold text-neutral-900">{jsonImportPreview.newTimeEntriesCount}</p>
+                  <p className="mt-1 text-xs text-neutral-500">sur {jsonImportPreview.timeEntriesCount} dans le fichier</p>
+                </div>
+                <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
+                  <p className="text-sm text-neutral-500">Tâches</p>
+                  <p className="mt-1 text-2xl font-bold text-neutral-900">{jsonImportPreview.newWorkSectorsCount}</p>
+                  <p className="mt-1 text-xs text-neutral-500">sur {jsonImportPreview.workSectorsCount}</p>
+                </div>
+                <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
+                  <p className="text-sm text-neutral-500">Sous-tâches</p>
+                  <p className="mt-1 text-2xl font-bold text-neutral-900">{jsonImportPreview.newSubTasksCount}</p>
+                  <p className="mt-1 text-xs text-neutral-500">sur {jsonImportPreview.subTasksCount}</p>
+                </div>
+                <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
+                  <p className="text-sm text-neutral-500">Tags</p>
+                  <p className="mt-1 text-2xl font-bold text-neutral-900">{jsonImportPreview.newTagsCount}</p>
+                  <p className="mt-1 text-xs text-neutral-500">sur {jsonImportPreview.tagsCount}</p>
+                </div>
+              </div>
+
+              <p className="mt-4 text-sm text-neutral-600">
+                Les doublons déjà présents dans la base locale seront ignorés. Aucune donnée existante ne sera supprimée.
+              </p>
             </div>
-          )}
+          ) : null}
+          </div>
+
+          <div className="rounded-3xl bg-neutral-50 p-5 ring-1 ring-neutral-200">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-neutral-900">Journal des sauvegardes et imports</h3>
+                <p className="mt-1 max-w-3xl text-sm text-neutral-600">
+                  Dernières actions effectuées depuis cette page. Ce journal est conservé localement dans ton navigateur.
+                </p>
+              </div>
+
+              {dataJournal.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={handleClearDataJournal}
+                  className="shrink-0 rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                >
+                  Vider le journal
+                </button>
+              ) : null}
+            </div>
+
+            {dataJournal.length > 0 ? (
+              <div className="mt-5 space-y-3">
+                {dataJournal.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex flex-col gap-2 rounded-2xl bg-white p-4 ring-1 ring-neutral-200 sm:flex-row sm:items-start sm:justify-between"
+                  >
+                    <div>
+                      <p className="text-sm font-semibold text-neutral-900">{entry.title}</p>
+                      <p className="mt-1 text-sm text-neutral-600">{entry.description}</p>
+                      {entry.detail ? (
+                        <p className="mt-1 text-xs text-neutral-500">{entry.detail}</p>
+                      ) : null}
+                    </div>
+                    <p className="shrink-0 text-xs font-medium text-neutral-500">
+                      {formatJournalDate(entry.createdAt)}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-5 rounded-2xl bg-white p-4 text-sm text-neutral-600 ring-1 ring-neutral-200">
+                Aucune action enregistrée pour le moment. Les prochains exports, sauvegardes et imports apparaîtront ici.
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-red-100">
