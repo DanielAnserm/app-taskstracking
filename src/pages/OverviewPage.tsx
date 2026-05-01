@@ -11,13 +11,15 @@ interface EntryWithSector extends TimeEntry {
   actions?: EntryAction[];
 }
 
-type RangeKey = "7d" | "30d" | "90d";
+type RangeKey = "7d" | "30d" | "90d" | "all";
+type ViewMode = "trend" | "distribution" | "table";
 
 interface WeekdayBucket {
   key: number;
   label: string;
   activeSeconds: number;
   pauseSeconds: number;
+  entryCount: number;
 }
 
 interface SectorBucket {
@@ -25,6 +27,8 @@ interface SectorBucket {
   sectorName: string;
   color: string;
   activeSeconds: number;
+  entryCount: number;
+  percentage: number;
 }
 
 interface TagBucket {
@@ -59,7 +63,33 @@ interface HourBucket {
   pauseSeconds: number;
 }
 
-function startDateForRange(range: RangeKey): Date {
+interface MonthBucket {
+  key: string;
+  label: string;
+  shortLabel: string;
+  activeSeconds: number;
+  pauseSeconds: number;
+  entryCount: number;
+  activeDays: Set<string>;
+}
+
+interface WeekBucket {
+  key: string;
+  label: string;
+  rangeLabel: string;
+  activeSeconds: number;
+  pauseSeconds: number;
+  entryCount: number;
+}
+
+interface PieSegment extends SectorBucket {
+  arcLength: number;
+  offset: number;
+}
+
+function startDateForRange(range: RangeKey): Date | null {
+  if (range === "all") return null;
+
   const now = new Date();
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -95,13 +125,100 @@ function hourLabel(hour: number): string {
 function getRangeLabel(range: RangeKey): string {
   if (range === "7d") return "7 derniers jours";
   if (range === "30d") return "30 derniers jours";
-  return "90 derniers jours";
+  if (range === "90d") return "90 derniers jours";
+  return "Toutes les données";
+}
+
+function getMonthKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getMonthLabelFromKey(key: string): string {
+  const [year, month] = key.split("-").map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString("fr-CA", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function getMonthShortLabelFromKey(key: string): string {
+  const [year, month] = key.split("-").map(Number);
+  const monthLabel = new Date(year, month - 1, 1).toLocaleDateString("fr-CA", {
+    month: "short",
+  });
+
+  return monthLabel.replace(".", "");
+}
+
+function getWeekStart(date: Date): Date {
+  const copy = new Date(date);
+  const day = copy.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  copy.setDate(copy.getDate() + diff);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function getWeekEnd(weekStart: Date): Date {
+  const copy = new Date(weekStart);
+  copy.setDate(copy.getDate() + 6);
+  copy.setHours(23, 59, 59, 999);
+  return copy;
+}
+
+function getWeekKey(date: Date): string {
+  const weekStart = getWeekStart(date);
+  return weekStart.toISOString().slice(0, 10);
+}
+
+function getISOWeekNumber(date: Date): number {
+  const copy = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNumber = copy.getUTCDay() || 7;
+  copy.setUTCDate(copy.getUTCDate() + 4 - dayNumber);
+  const yearStart = new Date(Date.UTC(copy.getUTCFullYear(), 0, 1));
+  return Math.ceil(((copy.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+function getWeekRangeLabel(weekStart: Date): string {
+  const weekEnd = getWeekEnd(weekStart);
+
+  return `${weekStart.toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "short",
+  })} au ${weekEnd.toLocaleDateString("fr-CA", {
+    day: "numeric",
+    month: "short",
+  })}`;
+}
+
+function formatDateLong(dateKey: string): string {
+  return new Date(`${dateKey}T12:00:00`).toLocaleDateString("fr-CA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value)}%`;
+}
+
+function formatDecimal(value: number): string {
+  return value.toLocaleString("fr-CA", {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 1,
+  });
+}
+
+function safeDuration(seconds: number): string {
+  return seconds > 0 ? formatDurationFromSeconds(seconds) : "0 min";
 }
 
 export function OverviewPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<RangeKey>("30d");
+  const [viewMode, setViewMode] = useState<ViewMode>("trend");
 
   useEffect(() => {
     let cancelled = false;
@@ -113,19 +230,19 @@ export function OverviewPage() {
       const enrichedEntries = await Promise.all(
         rawEntries.map(async (entry) => {
           const sector = await db.workSectors.get(entry.sectorId);
-const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
-const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
-const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
-const tags = tagResults.filter(Boolean) as Tag[];
-const actions = await db.entryActions.where("timeEntryId").equals(entry.id).toArray();
+          const subTask = entry.subTaskId ? await db.subTasks.get(entry.subTaskId) : undefined;
+          const links = await db.timeEntryTags.where("timeEntryId").equals(entry.id).toArray();
+          const tagResults = await Promise.all(links.map((link) => db.tags.get(link.tagId)));
+          const tags = tagResults.filter(Boolean) as Tag[];
+          const actions = await db.entryActions.where("timeEntryId").equals(entry.id).toArray();
 
-return {
-  ...entry,
-  sector,
-  subTask,
-  tags,
-  actions,
-};
+          return {
+            ...entry,
+            sector,
+            subTask,
+            tags,
+            actions,
+          };
         }),
       );
 
@@ -146,12 +263,18 @@ return {
     const start = startDateForRange(range);
 
     return entries
-      .filter((entry) => new Date(entry.startAt) >= start)
-      .sort((a, b) => new Date(b.startAt).getTime() - new Date(a.startAt).getTime());
+      .filter((entry) => !start || new Date(entry.startAt) >= start)
+      .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
   }, [entries, range]);
 
-  const activeEntries = filteredEntries.filter((entry) => !entry.isPause);
-  const pauseEntries = filteredEntries.filter((entry) => entry.isPause);
+  const activeEntries = useMemo(
+    () => filteredEntries.filter((entry) => !entry.isPause),
+    [filteredEntries],
+  );
+  const pauseEntries = useMemo(
+    () => filteredEntries.filter((entry) => entry.isPause),
+    [filteredEntries],
+  );
 
   const totalActiveSeconds = activeEntries.reduce(
     (sum, entry) => sum + entry.durationSeconds,
@@ -161,8 +284,71 @@ return {
     (sum, entry) => sum + entry.durationSeconds,
     0,
   );
-
+  const totalSeconds = totalActiveSeconds + totalPauseSeconds;
   const activeDays = new Set(filteredEntries.map((entry) => entry.date)).size;
+
+  const monthBuckets = useMemo<MonthBucket[]>(() => {
+    const map = new Map<string, MonthBucket>();
+
+    for (const entry of filteredEntries) {
+      const date = new Date(entry.startAt);
+      const key = getMonthKey(date);
+      const existing = map.get(key);
+
+      if (existing) {
+        if (entry.isPause) {
+          existing.pauseSeconds += entry.durationSeconds;
+        } else {
+          existing.activeSeconds += entry.durationSeconds;
+        }
+        existing.entryCount += 1;
+        existing.activeDays.add(entry.date);
+      } else {
+        map.set(key, {
+          key,
+          label: getMonthLabelFromKey(key),
+          shortLabel: getMonthShortLabelFromKey(key),
+          activeSeconds: entry.isPause ? 0 : entry.durationSeconds,
+          pauseSeconds: entry.isPause ? entry.durationSeconds : 0,
+          entryCount: 1,
+          activeDays: new Set([entry.date]),
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [filteredEntries]);
+
+  const weekBuckets = useMemo<WeekBucket[]>(() => {
+    const map = new Map<string, WeekBucket>();
+
+    for (const entry of filteredEntries) {
+      const date = new Date(entry.startAt);
+      const key = getWeekKey(date);
+      const existing = map.get(key);
+
+      if (existing) {
+        if (entry.isPause) {
+          existing.pauseSeconds += entry.durationSeconds;
+        } else {
+          existing.activeSeconds += entry.durationSeconds;
+        }
+        existing.entryCount += 1;
+      } else {
+        const weekStart = getWeekStart(date);
+        map.set(key, {
+          key,
+          label: `Semaine ${getISOWeekNumber(weekStart)}`,
+          rangeLabel: getWeekRangeLabel(weekStart),
+          activeSeconds: entry.isPause ? 0 : entry.durationSeconds,
+          pauseSeconds: entry.isPause ? entry.durationSeconds : 0,
+          entryCount: 1,
+        });
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [filteredEntries]);
 
   const weekdayBuckets = useMemo<WeekdayBucket[]>(() => {
     const buckets: WeekdayBucket[] = Array.from({ length: 7 }, (_, day) => ({
@@ -170,6 +356,7 @@ return {
       label: weekdayLabel(day),
       activeSeconds: 0,
       pauseSeconds: 0,
+      entryCount: 0,
     }));
 
     for (const entry of filteredEntries) {
@@ -179,13 +366,14 @@ return {
       } else {
         buckets[day].activeSeconds += entry.durationSeconds;
       }
+      buckets[day].entryCount += 1;
     }
 
     return buckets.sort((a, b) => b.activeSeconds - a.activeSeconds);
   }, [filteredEntries]);
 
   const sectorBuckets = useMemo<SectorBucket[]>(() => {
-    const map = new Map<string, SectorBucket>();
+    const map = new Map<string, Omit<SectorBucket, "percentage">>();
 
     for (const entry of activeEntries) {
       const key = entry.sectorId;
@@ -193,18 +381,25 @@ return {
 
       if (existing) {
         existing.activeSeconds += entry.durationSeconds;
+        existing.entryCount += 1;
       } else {
         map.set(key, {
           sectorId: key,
           sectorName: entry.sector?.name ?? key,
           color: entry.sector?.color ?? "#737373",
           activeSeconds: entry.durationSeconds,
+          entryCount: 1,
         });
       }
     }
 
-    return Array.from(map.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
-  }, [activeEntries]);
+    return Array.from(map.values())
+      .map((bucket) => ({
+        ...bucket,
+        percentage: totalActiveSeconds > 0 ? (bucket.activeSeconds / totalActiveSeconds) * 100 : 0,
+      }))
+      .sort((a, b) => b.activeSeconds - a.activeSeconds);
+  }, [activeEntries, totalActiveSeconds]);
 
   const subTaskBuckets = useMemo<SubTaskBucket[]>(() => {
     const map = new Map<string, SubTaskBucket>();
@@ -227,40 +422,38 @@ return {
 
     return Array.from(map.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
   }, [activeEntries]);
+
   const actionBuckets = useMemo<ActionBucket[]>(() => {
-  const map = new Map<string, ActionBucket>();
+    const map = new Map<string, ActionBucket>();
 
-  for (const entry of activeEntries) {
-    const entryActions = entry.actions ?? [];
+    for (const entry of activeEntries) {
+      const entryActions = entry.actions ?? [];
 
-    for (const action of entryActions) {
-      const key = action.actionType.trim().toLowerCase();
-      const existing = map.get(key);
+      for (const action of entryActions) {
+        const key = action.actionType.trim().toLowerCase();
+        const existing = map.get(key);
 
-      if (existing) {
-        existing.totalQuantity += action.quantity;
-        existing.entryCount += 1;
-      } else {
-        map.set(key, {
-          actionType: action.actionType,
-          totalQuantity: action.quantity,
-          entryCount: 1,
-        });
+        if (existing) {
+          existing.totalQuantity += action.quantity;
+          existing.entryCount += 1;
+        } else {
+          map.set(key, {
+            actionType: action.actionType,
+            totalQuantity: action.quantity,
+            entryCount: 1,
+          });
+        }
       }
     }
-  }
 
-  return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
-}, [activeEntries]);
+    return Array.from(map.values()).sort((a, b) => b.totalQuantity - a.totalQuantity);
+  }, [activeEntries]);
 
-const totalActionQuantity = actionBuckets.reduce(
-  (sum, action) => sum + action.totalQuantity,
-  0,
-);
+  const totalActionQuantity = actionBuckets.reduce(
+    (sum, action) => sum + action.totalQuantity,
+    0,
+  );
 
-const entriesWithActionsCount = activeEntries.filter(
-  (entry) => (entry.actions?.length ?? 0) > 0,
-).length;
   const tagBuckets = useMemo<TagBucket[]>(() => {
     const map = new Map<string, TagBucket>();
 
@@ -337,6 +530,13 @@ const entriesWithActionsCount = activeEntries.filter(
       .slice(0, 3);
   }, [hourBuckets]);
 
+  const lowProductiveHours = useMemo(() => {
+    return [...hourBuckets]
+      .filter((bucket) => bucket.activeSeconds > 0)
+      .sort((a, b) => a.activeSeconds - b.activeSeconds)
+      .slice(0, 3);
+  }, [hourBuckets]);
+
   const averageSessionSeconds =
     activeEntries.length > 0 ? Math.floor(totalActiveSeconds / activeEntries.length) : 0;
 
@@ -371,434 +571,611 @@ const entriesWithActionsCount = activeEntries.filter(
     return totalChanges / grouped.size;
   }, [activeEntries]);
 
-  const workShare =
-    totalActiveSeconds + totalPauseSeconds > 0
-      ? Math.round((totalActiveSeconds / (totalActiveSeconds + totalPauseSeconds)) * 100)
-      : 0;
+  const mostFragmentedDay = useMemo(() => {
+    const grouped = new Map<string, EntryWithSector[]>();
 
-  const pauseShare =
-    totalActiveSeconds + totalPauseSeconds > 0 ? 100 - workShare : 0;
+    for (const entry of activeEntries) {
+      const list = grouped.get(entry.date) ?? [];
+      list.push(entry);
+      grouped.set(entry.date, list);
+    }
+
+    let result: { date: string; changes: number } | null = null;
+
+    for (const [date, dayEntries] of grouped) {
+      const sorted = [...dayEntries].sort(
+        (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+      );
+
+      let changes = 0;
+      for (let i = 1; i < sorted.length; i += 1) {
+        if (sorted[i].sectorId !== sorted[i - 1].sectorId) {
+          changes += 1;
+        }
+      }
+
+      if (!result || changes > result.changes) {
+        result = { date, changes };
+      }
+    }
+
+    return result;
+  }, [activeEntries]);
+
+  const leastFragmentedDay = useMemo(() => {
+    const grouped = new Map<string, EntryWithSector[]>();
+
+    for (const entry of activeEntries) {
+      const list = grouped.get(entry.date) ?? [];
+      list.push(entry);
+      grouped.set(entry.date, list);
+    }
+
+    let result: { date: string; changes: number } | null = null;
+
+    for (const [date, dayEntries] of grouped) {
+      const sorted = [...dayEntries].sort(
+        (a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime(),
+      );
+
+      let changes = 0;
+      for (let i = 1; i < sorted.length; i += 1) {
+        if (sorted[i].sectorId !== sorted[i - 1].sectorId) {
+          changes += 1;
+        }
+      }
+
+      if (!result || changes < result.changes) {
+        result = { date, changes };
+      }
+    }
+
+    return result;
+  }, [activeEntries]);
+
+  const workShare = totalSeconds > 0 ? Math.round((totalActiveSeconds / totalSeconds) * 100) : 0;
+  const pauseShare = totalSeconds > 0 ? 100 - workShare : 0;
+
+  const averageDailySeconds = activeDays > 0 ? Math.floor(totalActiveSeconds / activeDays) : 0;
+  const averageWeeklySeconds =
+    weekBuckets.length > 0 ? Math.floor(totalActiveSeconds / weekBuckets.length) : 0;
+  const averageMonthlySeconds =
+    monthBuckets.length > 0 ? Math.floor(totalActiveSeconds / monthBuckets.length) : 0;
+
+  const activeWeekBuckets = weekBuckets.filter((week) => week.activeSeconds > 0);
+  const bestWeek = [...weekBuckets].sort((a, b) => b.activeSeconds - a.activeSeconds)[0];
+  const bestMonth = [...monthBuckets].sort((a, b) => b.activeSeconds - a.activeSeconds)[0];
+  const lightestMonth = [...monthBuckets]
+    .filter((month) => month.activeSeconds > 0)
+    .sort((a, b) => a.activeSeconds - b.activeSeconds)[0];
+  const highestPauseMonth = [...monthBuckets]
+    .filter((month) => month.pauseSeconds > 0)
+    .sort((a, b) => b.pauseSeconds / Math.max(1, b.activeSeconds + b.pauseSeconds) - a.pauseSeconds / Math.max(1, a.activeSeconds + a.pauseSeconds))[0];
+  const topSector = sectorBuckets[0];
+
+  const energySummary = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const entry of activeEntries) {
+      const energy = entry.energy;
+      if (!energy) continue;
+      map.set(energy, (map.get(energy) ?? 0) + 1);
+    }
+
+    const top = Array.from(map.entries()).sort((a, b) => b[1] - a[1])[0];
+    return top?.[0] ?? "—";
+  }, [activeEntries]);
+
+  const trendHeight = 240;
+  const trendStep = 72;
+  const trendWidth = Math.max(monthBuckets.length, 1) * trendStep;
+  const trendMax = Math.max(...monthBuckets.map((month) => month.activeSeconds), 1);
+  const trendPoints = monthBuckets
+    .map((month, index) => {
+      const x = index * trendStep + trendStep / 2;
+      const y = trendHeight - (month.activeSeconds / trendMax) * trendHeight;
+      return `${x},${y}`;
+    })
+    .join(" ");
+
+  const pieRadius = 92;
+  const pieCircumference = 2 * Math.PI * pieRadius;
+  let pieOffset = 0;
+  const pieSegments: PieSegment[] = sectorBuckets.map((sector) => {
+    const arcLength = totalActiveSeconds > 0 ? (sector.activeSeconds / totalActiveSeconds) * pieCircumference : 0;
+    const segment = {
+      ...sector,
+      arcLength,
+      offset: pieOffset,
+    };
+    pieOffset += arcLength;
+    return segment;
+  });
+
+  const keyMetrics = [
+    { title: "Temps total cumulé", value: safeDuration(totalActiveSeconds) },
+    { title: "Moyenne mensuelle", value: safeDuration(averageMonthlySeconds) },
+    { title: "Moyenne hebdomadaire", value: safeDuration(averageWeeklySeconds) },
+    { title: "Moyenne journalière", value: safeDuration(averageDailySeconds) },
+    { title: "Jours actifs", value: String(activeDays) },
+    { title: "Répartition travail / pause", value: `${workShare}% / ${pauseShare}%` },
+    {
+      title: "Semaine record",
+      value: bestWeek ? `${bestWeek.label} — ${safeDuration(bestWeek.activeSeconds)}` : "—",
+    },
+    {
+      title: "Mois record",
+      value: bestMonth ? `${bestMonth.label} — ${safeDuration(bestMonth.activeSeconds)}` : "—",
+    },
+  ];
 
   return (
-    <main className="min-h-screen bg-neutral-100 p-6">
+    <main className="min-h-screen bg-neutral-100 p-4 md:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="space-y-2">
-          <Link
-            to="/"
-            className="text-sm font-medium text-neutral-500 hover:text-neutral-800"
-          >
+        <header className="space-y-3">
+          <Link to="/" className="text-sm font-medium text-neutral-500 hover:text-neutral-800">
             Retour à l’accueil
           </Link>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h1 className="text-3xl font-bold tracking-tight text-neutral-900">
-                Vue globale
-              </h1>
+              <h1 className="text-3xl font-bold tracking-tight text-neutral-900">Vue globale</h1>
               <p className="mt-1 text-sm text-neutral-600">
-                Consolidation réelle des entrées sur une période.
+                Vue transversale pour suivre les tendances générales, les volumes cumulés et les équilibres de travail dans le temps.
               </p>
             </div>
 
-            <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-600 shadow-sm ring-1 ring-black/5">
-              {getRangeLabel(range)}
+            <div className="flex flex-wrap gap-2">
+              <button className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm">
+                {getRangeLabel(range)}
+              </button>
+              <button
+                type="button"
+                onClick={() => setRange("all")}
+                className={`rounded-full px-4 py-2 text-sm font-medium shadow-sm ${
+                  range === "all"
+                    ? "bg-neutral-900 text-white"
+                    : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
+                }`}
+              >
+                Toutes les données
+              </button>
             </div>
           </div>
         </header>
 
-        <section className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setRange("7d")}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${range === "7d"
-                  ? "bg-neutral-900 text-white"
-                  : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-                }`}
-            >
-              7 jours
-            </button>
-            <button
-              type="button"
-              onClick={() => setRange("30d")}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${range === "30d"
-                  ? "bg-neutral-900 text-white"
-                  : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-                }`}
-            >
-              30 jours
-            </button>
-            <button
-              type="button"
-              onClick={() => setRange("90d")}
-              className={`rounded-full px-4 py-2 text-sm font-medium transition ${range === "90d"
-                  ? "bg-neutral-900 text-white"
-                  : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
-                }`}
-            >
-              90 jours
-            </button>
-          </div>
-        </section>
-
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Temps actif</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {formatDurationFromSeconds(totalActiveSeconds)}
-            </p>
+        <section className="space-y-4 rounded-[32px] bg-white p-5 shadow-sm ring-1 ring-black/5">
+          <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-4">
+            {keyMetrics.map((metric) => (
+              <div
+                key={metric.title}
+                className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200"
+              >
+                <p className="text-sm text-neutral-500">{metric.title}</p>
+                <p className="mt-1 text-xl font-bold text-neutral-900">{metric.value}</p>
+              </div>
+            ))}
           </div>
 
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Temps de pause</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {formatDurationFromSeconds(totalPauseSeconds)}
-            </p>
-          </div>
-
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Entrées</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {filteredEntries.length}
-            </p>
-          </div>
-
-          <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Jours actifs</p>
-            <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {activeDays}
-            </p>
-          </div>
-<div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-  <p className="text-sm font-medium text-neutral-500">Volume d’actions</p>
-  <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-    {totalActionQuantity}
-  </p>
-</div>
-
-<div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
-  <p className="text-sm font-medium text-neutral-500">Entrées avec actions</p>
-  <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-    {entriesWithActionsCount}
-  </p>
-</div>
-
-        </section>
-
-        {loading ? (
-          <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-            <p className="text-sm text-neutral-600">Chargement…</p>
-          </section>
-        ) : (
-          <>
-            <section className="grid gap-4 xl:grid-cols-2">
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-                <h2 className="text-xl font-semibold text-neutral-900">
-                  Répartition travail / pause
-                </h2>
-
-                <div className="mt-6 space-y-5">
-                  <div>
-                    <div className="mb-2 flex items-center justify-between text-sm text-neutral-600">
-                      <span>Travail</span>
-                      <span>{workShare}%</span>
-                    </div>
-                    <div className="h-3 overflow-hidden rounded-full bg-neutral-200">
-                      <div
-                        className="h-full rounded-full bg-neutral-900 transition-all"
-                        style={{ width: `${workShare}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-2 flex items-center justify-between text-sm text-neutral-600">
-                      <span>Pause</span>
-                      <span>{pauseShare}%</span>
-                    </div>
-                    <div className="h-3 overflow-hidden rounded-full bg-neutral-200">
-                      <div
-                        className="h-full rounded-full bg-amber-400 transition-all"
-                        style={{ width: `${pauseShare}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-                <h2 className="text-xl font-semibold text-neutral-900">
-                  Indicateurs complémentaires
-                </h2>
-
-                <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                  <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
-                    <p className="text-sm font-medium text-neutral-500">Temps moyen par session</p>
-                    <p className="mt-2 text-2xl font-bold tracking-tight text-neutral-900">
-                      {formatDurationFromSeconds(averageSessionSeconds)}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
-                    <p className="text-sm font-medium text-neutral-500">
-                      Changements de tâche / jour
-                    </p>
-                    <p className="mt-2 text-2xl font-bold tracking-tight text-neutral-900">
-                      {averageTaskChangesPerDay.toFixed(1)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section className="grid gap-4 xl:grid-cols-2">
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-                <h2 className="text-xl font-semibold text-neutral-900">
-                  Jours les plus productifs
-                </h2>
-
-                {productiveDays.length === 0 ? (
-                  <p className="mt-4 text-sm text-neutral-600">
-                    Aucun jour actif sur cette période.
-                  </p>
-                ) : (
-                  <div className="mt-5 space-y-3">
-                    {productiveDays.slice(0, 3).map((day, index) => (
-                      <div
-                        key={day.date}
-                        className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
-                                #{index + 1}
-                              </span>
-                              <p className="font-semibold text-neutral-900">
-                                {new Date(`${day.date}T12:00:00`).toLocaleDateString("fr-CA", {
-                                  weekday: "long",
-                                  day: "numeric",
-                                  month: "long",
-                                })}
-                              </p>
-                            </div>
-                            <p className="mt-2 text-sm text-neutral-500">
-                              Pause : {formatDurationFromSeconds(day.pauseSeconds)} · Entrées :{" "}
-                              {day.entryCount}
-                            </p>
-                          </div>
-
-                          <p className="shrink-0 font-semibold text-neutral-900">
-                            {formatDurationFromSeconds(day.activeSeconds)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-                <h2 className="text-xl font-semibold text-neutral-900">
-                  Périodes les plus productives
-                </h2>
-
-                {topProductiveHours.length === 0 ? (
-                  <p className="mt-4 text-sm text-neutral-600">
-                    Aucune plage horaire active sur cette période.
-                  </p>
-                ) : (
-                  <div className="mt-5 space-y-3">
-                    {topProductiveHours.map((bucket, index) => (
-                      <div
-                        key={bucket.hour}
-                        className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
-                                #{index + 1}
-                              </span>
-                              <p className="font-semibold text-neutral-900">{bucket.label}</p>
-                            </div>
-                            <p className="mt-2 text-sm text-neutral-500">
-                              Pause : {formatDurationFromSeconds(bucket.pauseSeconds)}
-                            </p>
-                          </div>
-
-                          <p className="shrink-0 font-semibold text-neutral-900">
-                            {formatDurationFromSeconds(bucket.activeSeconds)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section className="grid gap-4 xl:grid-cols-5">
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
-                <h2 className="text-xl font-semibold text-neutral-900">
-                  Répartition par jour de la semaine
-                </h2>
-
-                <div className="mt-5 space-y-3">
-                  {weekdayBuckets.map((day) => (
-                    <div
-                      key={day.key}
-                      className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <p className="font-semibold text-neutral-900">{day.label}</p>
-                          <p className="mt-1 text-sm text-neutral-500">
-                            Pause : {formatDurationFromSeconds(day.pauseSeconds)}
-                          </p>
-                        </div>
-                        <p className="font-semibold text-neutral-900">
-                          {formatDurationFromSeconds(day.activeSeconds)}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
-                <h2 className="text-xl font-semibold text-neutral-900">Top secteurs</h2>
-
-                {sectorBuckets.length === 0 ? (
-                  <p className="mt-4 text-sm text-neutral-600">
-                    Aucun secteur de travail sur cette période.
-                  </p>
-                ) : (
-                  <div className="mt-5 space-y-3">
-                    {sectorBuckets.map((sector, index) => (
-                      <div
-                        key={sector.sectorId}
-                        className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
-                              #{index + 1}
-                            </span>
-                            <span
-                              className="h-3 w-3 rounded-full"
-                              style={{ backgroundColor: sector.color }}
-                            />
-                            <p className="font-semibold text-neutral-900">
-                              {sector.sectorName}
-                            </p>
-                          </div>
-                          <p className="font-semibold text-neutral-900">
-                            {formatDurationFromSeconds(sector.activeSeconds)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
-                <h2 className="text-xl font-semibold text-neutral-900">Top sous-tâches</h2>
-
-                {subTaskBuckets.length === 0 ? (
-                  <p className="mt-4 text-sm text-neutral-600">
-                    Aucune sous-tâche associée aux entrées de travail sur cette période.
-                  </p>
-                ) : (
-                  <div className="mt-5 space-y-3">
-                    {subTaskBuckets.map((subTask, index) => (
-                      <div
-                        key={subTask.subTaskId}
-                        className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
-                              #{index + 1}
-                            </span>
-                            <p className="font-semibold text-neutral-900">{subTask.subTaskName}</p>
-                          </div>
-                          <p className="font-semibold text-neutral-900">
-                            {formatDurationFromSeconds(subTask.activeSeconds)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-<div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
-  <h2 className="text-xl font-semibold text-neutral-900">Top actions</h2>
-
-  {actionBuckets.length === 0 ? (
-    <p className="mt-4 text-sm text-neutral-600">
-      Aucune action associée aux entrées de travail sur cette période.
-    </p>
-  ) : (
-    <div className="mt-5 space-y-3">
-      {actionBuckets.map((action, index) => (
-        <div
-          key={`${action.actionType}-${index}`}
-          className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
-                #{index + 1}
-              </span>
-              <div>
-                <p className="font-semibold text-neutral-900">{action.actionType}</p>
-                <p className="mt-1 text-xs text-neutral-500">
-                  Présente dans {action.entryCount} entrée{action.entryCount > 1 ? "s" : ""}
-                </p>
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="rounded-3xl bg-neutral-50 p-3 ring-1 ring-neutral-200">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">Filtres</h2>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["7d", "7 jours"],
+                  ["30d", "30 jours"],
+                  ["90d", "90 jours"],
+                  ["all", "Toutes les données"],
+                ] as Array<[RangeKey, string]>).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setRange(value)}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium ring-1 ${
+                      range === value
+                        ? "bg-neutral-900 text-white ring-neutral-900"
+                        : "bg-white text-neutral-700 ring-neutral-200 hover:bg-neutral-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
-            <p className="font-semibold text-neutral-900">{action.totalQuantity}</p>
+
+            <div className="rounded-3xl bg-neutral-50 p-3 ring-1 ring-neutral-200">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">Tri / affichage</h2>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["trend", "Tendance"],
+                  ["distribution", "Répartition"],
+                  ["table", "Tableau"],
+                ] as Array<[ViewMode, string]>).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setViewMode(value)}
+                    className={`rounded-full px-4 py-2 text-sm font-medium ${
+                      viewMode === value
+                        ? "bg-neutral-900 text-white"
+                        : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
-        </div>
-      ))}
-    </div>
-  )}
-</div>
 
-              <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5 xl:col-span-1">
-                <h2 className="text-xl font-semibold text-neutral-900">Top tags</h2>
+          {loading ? (
+            <div className="rounded-3xl bg-neutral-50 p-6 ring-1 ring-neutral-200">
+              <p className="text-sm text-neutral-600">Chargement…</p>
+            </div>
+          ) : filteredEntries.length === 0 ? (
+            <div className="rounded-3xl bg-neutral-50 p-6 ring-1 ring-neutral-200">
+              <p className="text-sm text-neutral-600">Aucune donnée à afficher sur cette période.</p>
+            </div>
+          ) : (
+            <>
+              {viewMode === "trend" ? (
+                <div className="overflow-hidden rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h2 className="text-base font-semibold text-neutral-900">Tendance globale</h2>
+                      <p className="text-sm text-neutral-500">Évolution du volume de travail actif au fil des mois.</p>
+                    </div>
+                  </div>
 
-                {tagBuckets.length === 0 ? (
-                  <p className="mt-4 text-sm text-neutral-600">
-                    Aucun tag associé aux entrées de travail sur cette période.
-                  </p>
-                ) : (
-                  <div className="mt-5 space-y-3">
-                    {tagBuckets.map((tag, index) => (
-                      <div
-                        key={tag.tagId}
-                        className="rounded-2xl bg-neutral-50 p-4 ring-1 ring-neutral-200"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <span className="rounded-full bg-neutral-900 px-2.5 py-1 text-xs font-medium text-white">
-                              #{index + 1}
-                            </span>
-                            <p className="font-semibold text-neutral-900">{tag.tagName}</p>
+                  <div className="overflow-x-auto pb-2 pl-10">
+                    <div className="min-w-[720px]">
+                      <div className="relative" style={{ height: `${trendHeight + 24}px`, width: `${trendWidth}px` }}>
+                        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+                          const y = trendHeight - fraction * trendHeight;
+                          const value = trendMax * fraction;
+                          return (
+                            <div key={fraction}>
+                              <div className="absolute left-0 right-0 border-t border-neutral-200" style={{ top: `${y}px` }} />
+                              <div className="absolute -left-10 text-xs text-neutral-500" style={{ top: `${y - 8}px` }}>
+                                {formatDurationFromSeconds(Math.round(value))}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        <svg
+                          className="absolute left-0 top-0 z-10"
+                          width={trendWidth}
+                          height={trendHeight}
+                          viewBox={`0 0 ${trendWidth} ${trendHeight}`}
+                        >
+                          {trendPoints ? (
+                            <polyline fill="none" stroke="#0ea5e9" strokeWidth="3" points={trendPoints} />
+                          ) : null}
+                          {monthBuckets.map((month, index) => {
+                            const x = index * trendStep + trendStep / 2;
+                            const y = trendHeight - (month.activeSeconds / trendMax) * trendHeight;
+                            return <circle key={month.key} cx={x} cy={y} r="4" fill="#0ea5e9" />;
+                          })}
+                        </svg>
+                      </div>
+
+                      <div className="mt-2 flex text-center text-[10px] text-neutral-500" style={{ width: `${trendWidth}px` }}>
+                        {monthBuckets.map((month) => (
+                          <div key={month.key} className="w-[72px]">
+                            {month.shortLabel}
                           </div>
-                          <p className="font-semibold text-neutral-900">
-                            {formatDurationFromSeconds(tag.activeSeconds)}
-                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {viewMode === "distribution" ? (
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                    <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">
+                      Répartition globale par secteur
+                    </h2>
+                    <div className="grid gap-4 lg:grid-cols-[260px_1fr] lg:items-center">
+                      <div className="flex items-center justify-center">
+                        <div className="relative flex items-center justify-center">
+                          <svg width="240" height="240" viewBox="0 0 240 240" className="-rotate-90">
+                            <circle cx="120" cy="120" r={pieRadius} fill="none" stroke="#ececec" strokeWidth="34" />
+                            {pieSegments.map((item) => {
+                              const dashOffset = pieCircumference / 4 - item.offset;
+                              return (
+                                <circle
+                                  key={item.sectorId}
+                                  cx="120"
+                                  cy="120"
+                                  r={pieRadius}
+                                  fill="none"
+                                  stroke={item.color}
+                                  strokeWidth="34"
+                                  strokeLinecap="butt"
+                                  strokeDasharray={`${item.arcLength} ${pieCircumference - item.arcLength}`}
+                                  strokeDashoffset={dashOffset}
+                                />
+                              );
+                            })}
+                          </svg>
+                          <div className="absolute text-center">
+                            <p className="text-sm text-neutral-500">Répartition</p>
+                            <p className="mt-1 text-xl font-bold text-neutral-900">100%</p>
+                          </div>
                         </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        {sectorBuckets.map((sector) => (
+                          <div key={sector.sectorId} className="rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                            <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className="h-3 w-3 rounded-sm" style={{ backgroundColor: sector.color }} />
+                                <span className="truncate text-neutral-700">{sector.sectorName}</span>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-3">
+                                <span className="text-xs text-neutral-500">{formatPercent(sector.percentage)}</span>
+                                <span className="font-semibold text-neutral-900">{formatDurationFromSeconds(sector.activeSeconds)}</span>
+                              </div>
+                            </div>
+                            <div className="h-2 rounded-full bg-neutral-100 ring-1 ring-neutral-200">
+                              <div
+                                className="h-2 rounded-full"
+                                style={{ width: `${sector.percentage}%`, backgroundColor: sector.color }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                    <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Comparatifs globaux</h2>
+                    <div className="space-y-2">
+                      {[
+                        ["Mois le plus productif", bestMonth ? `${bestMonth.label} — ${safeDuration(bestMonth.activeSeconds)}` : "—"],
+                        ["Mois le plus léger", lightestMonth ? `${lightestMonth.label} — ${safeDuration(lightestMonth.activeSeconds)}` : "—"],
+                        [
+                          "Plus forte part de pauses",
+                          highestPauseMonth
+                            ? `${highestPauseMonth.label} — ${formatPercent((highestPauseMonth.pauseSeconds / Math.max(1, highestPauseMonth.activeSeconds + highestPauseMonth.pauseSeconds)) * 100)}`
+                            : "—",
+                        ],
+                        ["Énergie moyenne dominante", energySummary],
+                        ["Tâche la plus récurrente", topSector?.sectorName ?? "—"],
+                      ].map(([label, value]) => (
+                        <div key={label} className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                          <span className="text-sm text-neutral-700">{label}</span>
+                          <span className="text-right text-sm font-semibold text-neutral-900">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {viewMode === "table" ? (
+                <div className="overflow-hidden rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <div className="mb-4">
+                    <h2 className="text-base font-semibold text-neutral-900">Tableau mensuel global</h2>
+                    <p className="text-sm text-neutral-500">Résumé par mois pour comparer les volumes et le ratio travail / pause.</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] border-separate border-spacing-y-2 text-left text-sm">
+                      <thead>
+                        <tr className="text-xs uppercase tracking-wide text-neutral-500">
+                          <th className="px-4 py-2">Mois</th>
+                          <th className="px-4 py-2">Travail</th>
+                          <th className="px-4 py-2">Pause</th>
+                          <th className="px-4 py-2">Total</th>
+                          <th className="px-4 py-2">Jours actifs</th>
+                          <th className="px-4 py-2">Entrées</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monthBuckets.map((month) => (
+                          <tr key={month.key} className="bg-white ring-1 ring-neutral-200">
+                            <td className="rounded-l-2xl px-4 py-3 font-medium capitalize text-neutral-900">{month.label}</td>
+                            <td className="px-4 py-3 font-semibold text-neutral-900">{formatDurationFromSeconds(month.activeSeconds)}</td>
+                            <td className="px-4 py-3 text-neutral-700">{formatDurationFromSeconds(month.pauseSeconds)}</td>
+                            <td className="px-4 py-3 text-neutral-700">{formatDurationFromSeconds(month.activeSeconds + month.pauseSeconds)}</td>
+                            <td className="px-4 py-3 text-neutral-700">{month.activeDays.size}</td>
+                            <td className="rounded-r-2xl px-4 py-3 text-neutral-700">{month.entryCount}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid gap-3 lg:grid-cols-3">
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Jours les plus productifs</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    {productiveDays.slice(0, 3).map((day) => (
+                      <div key={day.date} className="rounded-2xl bg-white px-3 py-3 font-semibold ring-1 ring-neutral-200">
+                        {formatDateLong(day.date)} — {formatDurationFromSeconds(day.activeSeconds)}
+                      </div>
+                    ))}
+                    {productiveDays.length === 0 ? <p className="text-sm text-neutral-500">Aucune donnée.</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Périodes les plus productives</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    {topProductiveHours.map((bucket) => (
+                      <div key={bucket.hour} className="rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        {bucket.label} — {formatDurationFromSeconds(bucket.activeSeconds)}
+                      </div>
+                    ))}
+                    {topProductiveHours.length === 0 ? <p className="text-sm text-neutral-500">Aucune donnée.</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Périodes creuses</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    {lowProductiveHours.map((bucket) => (
+                      <div key={bucket.hour} className="rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        {bucket.label} — {formatDurationFromSeconds(bucket.activeSeconds)}
+                      </div>
+                    ))}
+                    {lowProductiveHours.length === 0 ? <p className="text-sm text-neutral-500">Aucune donnée.</p> : null}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-3">
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Évolution de l’énergie moyenne</h2>
+                  <div className="space-y-2">
+                    {monthBuckets.slice(-4).map((month) => (
+                      <div key={month.key} className="flex items-center justify-between rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        <span className="text-sm capitalize text-neutral-700">{month.label}</span>
+                        <span className="text-sm font-semibold text-neutral-900">{energySummary}</span>
+                      </div>
+                    ))}
+                    {monthBuckets.length === 0 ? <p className="text-sm text-neutral-500">Aucune donnée.</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Répartition par jour de la semaine</h2>
+                  <div className="space-y-2">
+                    {weekdayBuckets.map((day) => (
+                      <div key={day.key} className="flex items-center justify-between rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        <span className="text-sm text-neutral-700">{day.label}</span>
+                        <span className="text-sm font-semibold text-neutral-900">{formatDurationFromSeconds(day.activeSeconds)}</span>
                       </div>
                     ))}
                   </div>
-                )}
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Top sous-tâches / top tags</h2>
+                  <div className="space-y-2">
+                    {[...subTaskBuckets.slice(0, 3).map((item) => [`${item.subTaskName}`, item.activeSeconds] as const), ...tagBuckets.slice(0, 3).map((item) => [`Tag : ${item.tagName}`, item.activeSeconds] as const)].slice(0, 5).map(([label, seconds]) => (
+                      <div key={label} className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        <span className="truncate text-sm text-neutral-700">{label}</span>
+                        <span className="shrink-0 text-sm font-semibold text-neutral-900">{formatDurationFromSeconds(seconds)}</span>
+                      </div>
+                    ))}
+                    {subTaskBuckets.length === 0 && tagBuckets.length === 0 ? <p className="text-sm text-neutral-500">Aucune donnée.</p> : null}
+                  </div>
+                </div>
               </div>
-            </section>
-          </>
-        )}
+
+              <div className="grid gap-3 lg:grid-cols-3">
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Régularité / dispersion</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    <div className="rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      Nombre de semaines actives : <span className="font-semibold text-neutral-900">{weekBuckets.length}</span>
+                    </div>
+                    <div className="rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      Écart entre semaine record et semaine faible :{" "}
+                      <span className="font-semibold text-neutral-900">
+                        {activeWeekBuckets.length > 1
+                          ? safeDuration(
+                              Math.max(...activeWeekBuckets.map((week) => week.activeSeconds)) -
+                                Math.min(...activeWeekBuckets.map((week) => week.activeSeconds)),
+                            )
+                          : "—"}
+                      </span>
+                    </div>
+                    <div className="rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      Répartition globale : <span className="font-semibold text-neutral-900">{workShare >= 80 ? "stable côté travail" : "pauses importantes"}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Temps moyen par session</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    <div className="flex items-center justify-between rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Global</span>
+                      <span className="font-semibold text-neutral-900">{safeDuration(averageSessionSeconds)}</span>
+                    </div>
+                    {sectorBuckets.slice(0, 2).map((sector) => (
+                      <div key={sector.sectorId} className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        <span className="truncate">{sector.sectorName}</span>
+                        <span className="shrink-0 font-semibold text-neutral-900">
+                          {safeDuration(Math.floor(sector.activeSeconds / Math.max(1, sector.entryCount)))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Changements de tâche par jour</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    <div className="flex items-center justify-between rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Moyenne quotidienne</span>
+                      <span className="font-semibold text-neutral-900">{formatDecimal(averageTaskChangesPerDay)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Jour le plus fragmenté</span>
+                      <span className="text-right font-semibold text-neutral-900">
+                        {mostFragmentedDay ? `${formatDateLong(mostFragmentedDay.date)} — ${mostFragmentedDay.changes}` : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Jour le plus stable</span>
+                      <span className="text-right font-semibold text-neutral-900">
+                        {leastFragmentedDay ? `${formatDateLong(leastFragmentedDay.date)} — ${leastFragmentedDay.changes}` : "—"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-3 lg:grid-cols-2">
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Top actions</h2>
+                  <div className="space-y-2">
+                    {actionBuckets.slice(0, 5).map((action, index) => (
+                      <div key={`${action.actionType}-${index}`} className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-neutral-900">{action.actionType}</p>
+                          <p className="mt-1 text-xs text-neutral-500">
+                            Présente dans {action.entryCount} entrée{action.entryCount > 1 ? "s" : ""}
+                          </p>
+                        </div>
+                        <span className="shrink-0 text-sm font-semibold text-neutral-900">{action.totalQuantity}</span>
+                      </div>
+                    ))}
+                    {actionBuckets.length === 0 ? <p className="text-sm text-neutral-500">Aucune action associée aux entrées.</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+                  <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-600">Résumé de période</h2>
+                  <div className="space-y-2 text-sm text-neutral-700">
+                    <div className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Entrées suivies</span>
+                      <span className="font-semibold text-neutral-900">{filteredEntries.length}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Actions saisies</span>
+                      <span className="font-semibold text-neutral-900">{totalActionQuantity}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 rounded-2xl bg-white px-3 py-3 ring-1 ring-neutral-200">
+                      <span>Période affichée</span>
+                      <span className="font-semibold text-neutral-900">{getRangeLabel(range)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+        </section>
       </div>
     </main>
   );
