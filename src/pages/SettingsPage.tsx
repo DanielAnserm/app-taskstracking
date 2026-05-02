@@ -106,13 +106,51 @@ interface JsonImportPreview {
   newActiveSessionsCount: number;
 }
 
+interface TodoistTargetOption {
+  id: string;
+  label: string;
+}
+
+interface TodoistImportTask {
+  importKey: string;
+  date: string;
+  dayLabel: string;
+  completedAt: string;
+  completedTimeLabel: string;
+  title: string;
+  projectName: string;
+  selected: boolean;
+  targetTimeEntryId: string;
+  targetOptions: TodoistTargetOption[];
+  importProjectAsTag: boolean;
+  suggestedTagName: string;
+  isDuplicate: boolean;
+  duplicateMode: TodoistDuplicateMode;
+  errors: string[];
+}
+
+interface TodoistImportPreview {
+  fileName: string;
+  tasks: TodoistImportTask[];
+  totalTasks: number;
+}
+
+type TodoistDuplicateMode = "ignore" | "add" | "replace";
+
+type TodoistNoteBuildResult = {
+  lines: string[];
+  actionQuantity: number;
+  removedExistingLines: string[];
+};
+
 type DataJournalType =
   | "export_csv"
   | "export_markdown"
   | "export_prompt"
   | "export_json"
   | "import_csv"
-  | "import_json";
+  | "import_json"
+  | "import_todoist";
 
 interface DataJournalEntry {
   id: string;
@@ -485,6 +523,399 @@ function formatJournalDate(isoDate: string): string {
   });
 }
 
+const TODOIST_MONTHS: Record<string, number> = {
+  jan: 0,
+  janv: 0,
+  janvier: 0,
+  feb: 1,
+  fev: 1,
+  fév: 1,
+  fevr: 1,
+  févr: 1,
+  fevrier: 1,
+  février: 1,
+  mar: 2,
+  mars: 2,
+  apr: 3,
+  avr: 3,
+  avril: 3,
+  may: 4,
+  mai: 4,
+  jun: 5,
+  juin: 5,
+  jul: 6,
+  juil: 6,
+  juillet: 6,
+  aug: 7,
+  aout: 7,
+  août: 7,
+  sep: 8,
+  sept: 8,
+  septembre: 8,
+  oct: 9,
+  octobre: 9,
+  nov: 10,
+  novembre: 10,
+  dec: 11,
+  déc: 11,
+  decembre: 11,
+  décembre: 11,
+};
+
+function parseTodoistTimeToMinutes(timeText: string): number | null {
+  const match = timeText.trim().match(/^(\d{1,2}):(\d{2})(?:\s*(AM|PM))?$/i);
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const meridiem = match[3]?.toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+
+  if (meridiem === "PM" && hours < 12) hours += 12;
+  if (meridiem === "AM" && hours === 12) hours = 0;
+
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+
+  return hours * 60 + minutes;
+}
+
+function minutesToTimeLabel(totalMinutes: number): string {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function buildTodoistImportKey(params: {
+  date: string;
+  completedTimeLabel: string;
+  title: string;
+  projectName: string;
+}): string {
+  return [
+    "todoist",
+    params.date,
+    params.completedTimeLabel,
+    normalizeForKey(params.title),
+    normalizeForKey(params.projectName),
+  ].join("|");
+}
+
+function buildTodoistNoteLine(task: Pick<TodoistImportTask, "title">): string {
+  const title = task.title.trim();
+  return title ? `- ${title}` : "";
+}
+
+function getBirthdayMessageName(title: string): string | null {
+  const match = title
+    .trim()
+    .match(/^(?:e|é|è|ê|ë|É|È|Ê|Ë)crire\s+(?:a|à)\s+(.+?)\s+pour\s+sa\s+f(?:e|ê)te$/i);
+  if (!match) return null;
+
+  const name = match[1]?.trim();
+  return name || null;
+}
+
+function buildTodoistNoteLines(tasks: TodoistImportTask[], groupSimilarTasks: boolean): TodoistNoteBuildResult {
+  const normalLines: string[] = [];
+  const birthdayTasks: TodoistImportTask[] = [];
+  const removedExistingLines: string[] = [];
+
+  for (const task of tasks) {
+    const title = buildTodoistNoteLine(task);
+    if (!title) continue;
+
+    const birthdayName = getBirthdayMessageName(task.title);
+    if (groupSimilarTasks && birthdayName) {
+      birthdayTasks.push(task);
+      removedExistingLines.push(title);
+      continue;
+    }
+
+    normalLines.push(title);
+    removedExistingLines.push(title);
+  }
+
+  if (birthdayTasks.length > 0) {
+    const birthdayLine = `- Écrire à ${birthdayTasks.length} personne${birthdayTasks.length > 1 ? "s" : ""} pour leur fête`;
+    normalLines.push(birthdayLine);
+    removedExistingLines.push(birthdayLine);
+  }
+
+  return {
+    lines: Array.from(new Set(normalLines.map((line) => line.trim()).filter(Boolean))),
+    actionQuantity: tasks.length,
+    removedExistingLines: Array.from(new Set(removedExistingLines.map((line) => line.trim()).filter(Boolean))),
+  };
+}
+
+function extractTodoistTitleFromNoteLine(line: string): string {
+  let cleanedLine = line.trim();
+
+  cleanedLine = cleanedLine.replace(/^Todoist\s*:\s*/i, "").trim();
+  cleanedLine = cleanedLine.replace(/^-\s+/, "").trim();
+  cleanedLine = cleanedLine.replace(/^\d{1,2}:\d{2}\s*(?:AM|PM)?\s*[—–-]\s*/i, "").trim();
+  cleanedLine = cleanedLine.replace(/\s+·\s+.+$/, "").trim();
+
+  return cleanedLine;
+}
+
+function isGroupedBirthdayTodoistLine(line: string): boolean {
+  return /^ecrire a \d+ personnes? pour leur fete$/.test(normalizeForKey(extractTodoistTitleFromNoteLine(line)));
+}
+
+function isSameTodoistNoteLine(line: string, expectedLine: string): boolean {
+  const cleanedLine = extractTodoistTitleFromNoteLine(line);
+  const cleanedExpected = extractTodoistTitleFromNoteLine(expectedLine);
+  const normalizedLine = normalizeForKey(cleanedLine);
+  const normalizedExpected = normalizeForKey(cleanedExpected);
+
+  if (!normalizedLine || !normalizedExpected) return false;
+  if (normalizedLine === normalizedExpected) return true;
+
+  if (/^ecrire a \d+ personnes? pour leur fete$/.test(normalizedExpected)) {
+    return /^ecrire a \d+ personnes? pour leur fete$/.test(normalizedLine);
+  }
+
+  return false;
+}
+
+function notesContainTodoistTask(notes: string | undefined, task: Pick<TodoistImportTask, "title">): boolean {
+  if (!notes) return false;
+
+  const expectedLine = buildTodoistNoteLine(task);
+  const normalizedExpectedTitle = normalizeForKey(task.title);
+  const isBirthdayTask = Boolean(getBirthdayMessageName(task.title));
+
+  return notes.split(/\r?\n/).some((line) => {
+    if (isSameTodoistNoteLine(line, expectedLine)) return true;
+    if (isBirthdayTask && isGroupedBirthdayTodoistLine(line)) return true;
+
+    const normalizedLine = normalizeForKey(extractTodoistTitleFromNoteLine(line));
+    return normalizedExpectedTitle.length > 8 && normalizedLine.includes(normalizedExpectedTitle);
+  });
+}
+
+function removeTodoistLinesFromNotes(currentNotes: string | undefined, linesToRemove: string[]): string | undefined {
+  if (!currentNotes) return currentNotes;
+
+  const filteredLines = currentNotes.split(/\r?\n/).filter((line) => {
+    return !linesToRemove.some((lineToRemove) => isSameTodoistNoteLine(line, lineToRemove));
+  });
+
+  const compactLines: string[] = [];
+  for (const line of filteredLines) {
+    const isBlank = line.trim() === "";
+    const previousIsBlank = compactLines[compactLines.length - 1]?.trim() === "";
+    if (isBlank && previousIsBlank) continue;
+    compactLines.push(line);
+  }
+
+  return compactLines.join("\n").trim() || undefined;
+}
+
+function appendTodoistLinesToNotes(currentNotes: string | undefined, lines: string[], duplicateMode: TodoistDuplicateMode): string {
+  const existingNotes = currentNotes?.trim() ?? "";
+  const cleanedLines = Array.from(new Set(lines.map((line) => line.trim()).filter(Boolean)));
+
+  const linesToAdd = duplicateMode === "add"
+    ? cleanedLines
+    : cleanedLines.filter((line) => !existingNotes.split(/\r?\n/).some((existingLine) => isSameTodoistNoteLine(existingLine, line)));
+
+  if (linesToAdd.length === 0) return existingNotes;
+
+  return existingNotes ? `${existingNotes}\n${linesToAdd.join("\n")}` : linesToAdd.join("\n");
+}
+
+function shouldImportTodoistProjectAsTag(projectName: string): boolean {
+  const normalizedProject = normalizeForKey(projectName);
+
+  if (!normalizedProject) return false;
+  if (normalizedProject === "boite de reception") return false;
+  if (normalizedProject === "inbox") return false;
+
+  return true;
+}
+
+function inferTodoistSectorNames(task: Pick<TodoistImportTask, "title" | "projectName">): string[] {
+  const title = normalizeForKey(task.title);
+  const projectName = normalizeForKey(task.projectName);
+  const combined = `${title} ${projectName}`;
+  const sectors: string[] = [];
+
+  if (/\b(courriel|courriels|mail|mails|email|emails)\b/.test(combined)) sectors.push("Mails");
+  if (/\b(appel|appels|appeler|rappeler|telephone|telephoner)\b/.test(combined)) sectors.push("Appels");
+  if (/\b(ecrire|message|messages|sms|whatsapp)\b/.test(combined)) sectors.push("Messages");
+  if (/\b(suivi|suivis|leader|leaders|benevole|benevoles|bienvenue)\b/.test(combined)) sectors.push("Suivis");
+  if (/\b(planif|planning|planifier|preparer|preparation)\b/.test(combined)) sectors.push("Planif bénévoles");
+  if (/\b(admin|administratif|facture|factures|devis)\b/.test(combined)) sectors.push("Admin");
+  if (/\b(reunion|reunions|rencontre|rencontres|responsables)\b/.test(combined)) sectors.push("Réunions");
+
+  return Array.from(new Set(sectors));
+}
+
+function sanitizeLegacyTodoistNotes(notes: string | undefined): { notes: string | undefined; changed: boolean } {
+  if (!notes) return { notes, changed: false };
+
+  let changed = false;
+  const cleanedLines: string[] = [];
+
+  for (const rawLine of notes.split(/\r?\n/)) {
+    const line = rawLine.trim();
+
+    if (normalizeForKey(line) === "todoist :" || normalizeForKey(line) === "todoist") {
+      changed = true;
+      continue;
+    }
+
+    const legacyMatch = line.match(/^-\s+\d{1,2}:\d{2}\s+—\s+(.+?)(?:\s+·\s+.+)?$/);
+    if (legacyMatch) {
+      const titleOnly = legacyMatch[1].trim();
+      if (titleOnly) cleanedLines.push(titleOnly);
+      changed = true;
+      continue;
+    }
+
+    cleanedLines.push(rawLine);
+  }
+
+  const compactLines: string[] = [];
+  for (const line of cleanedLines) {
+    const isBlank = line.trim() === "";
+    const previousIsBlank = compactLines[compactLines.length - 1]?.trim() === "";
+    if (isBlank && previousIsBlank) continue;
+    compactLines.push(line);
+  }
+
+  const nextNotes = compactLines.join("\n").trim() || undefined;
+  return { notes: nextNotes, changed };
+}
+
+function readTodoistReportYear(fileName: string): number {
+  const yearFromFileName = fileName.match(/(20\d{2})/)?.[1];
+  const parsedYear = Number(yearFromFileName);
+  if (Number.isFinite(parsedYear)) return parsedYear;
+
+  return new Date().getFullYear();
+}
+
+function parseTodoistReportMarkdown(fileName: string, markdown: string) {
+  const fallbackYear = readTodoistReportYear(fileName);
+  const tasks: Array<{
+    date: string;
+    dayLabel: string;
+    completedAt: string;
+    completedTimeLabel: string;
+    title: string;
+    projectName: string;
+    importKey: string;
+  }> = [];
+
+  let currentDate = "";
+  let currentDayLabel = "";
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const dayMatch = line.match(/^##\s+(.+?)\s+(?:‧|·|-)\s+(.+)$/);
+    if (dayMatch) {
+      const rawDate = dayMatch[1].trim();
+      currentDayLabel = dayMatch[2].trim();
+
+      const dateMatch = rawDate.match(/^([A-Za-zÀ-ÿ.]+)\s+(\d{1,2})(?:,?\s*(\d{4}))?$/);
+      if (dateMatch) {
+        const monthKey = normalizeForKey(dateMatch[1].replace(/\./g, ""));
+        const month = TODOIST_MONTHS[monthKey];
+        const day = Number(dateMatch[2]);
+        const year = Number(dateMatch[3] ?? fallbackYear);
+
+        if (month !== undefined && Number.isFinite(day) && Number.isFinite(year)) {
+          currentDate = toDateInputValue(new Date(year, month, day));
+        } else {
+          currentDate = "";
+        }
+      } else {
+        currentDate = "";
+      }
+
+      continue;
+    }
+
+    const taskMatch = line.match(/^-\s+(.+?)\s+—\s+Vous avez achevé\s+"(.+?)"(?:\s+·\s+(.+))?$/);
+    if (!taskMatch || !currentDate) continue;
+
+    const timeText = taskMatch[1].trim();
+    const minutes = parseTodoistTimeToMinutes(timeText);
+    if (minutes === null) continue;
+
+    const completedTimeLabel = minutesToTimeLabel(minutes);
+    const title = taskMatch[2].trim();
+    const projectName = taskMatch[3]?.trim() ?? "";
+    const completedAt = `${currentDate}T${completedTimeLabel}:00`;
+    const importKey = buildTodoistImportKey({
+      date: currentDate,
+      completedTimeLabel,
+      title,
+      projectName,
+    });
+
+    tasks.push({
+      date: currentDate,
+      dayLabel: currentDayLabel,
+      completedAt,
+      completedTimeLabel,
+      title,
+      projectName,
+      importKey,
+    });
+  }
+
+  return tasks;
+}
+
+function getTodoistTargetLabel(entry: any, sectorsById: Map<string, WorkSector>, subTasksById: Map<string, SubTask>): string {
+  const sector = sectorsById.get(entry.sectorId);
+  const subTask = entry.subTaskId ? subTasksById.get(entry.subTaskId) : undefined;
+  const start = getTimeLabel(entry.startAt);
+  const end = getTimeLabel(entry.endAt);
+  const title = entry.isPause ? "Pause" : sector?.name || "Sans tâche";
+
+  return `${start}–${end} — ${title}${subTask ? ` / ${subTask.name}` : ""}`;
+}
+
+function findBestTodoistTargetId(
+  task: Pick<TodoistImportTask, "completedAt" | "title" | "projectName">,
+  options: Array<{ id: string; startAt: string; endAt: string; sectorName: string; subTaskName?: string; isPause?: boolean }>,
+): string {
+  if (options.length === 0) return "";
+
+  const completed = new Date(task.completedAt).getTime();
+  const inferredSectorNames = inferTodoistSectorNames(task).map((sectorName) => normalizeForKey(sectorName));
+
+  return options
+    .map((option, index) => {
+      const start = new Date(option.startAt).getTime();
+      const end = new Date(option.endAt).getTime();
+      const distance = Number.isNaN(completed)
+        ? index
+        : Math.min(Math.abs(completed - start), Math.abs(completed - end));
+      const containsCompletedAt = !Number.isNaN(completed) && completed >= start && completed <= end;
+      const normalizedSectorName = normalizeForKey(option.sectorName);
+      const sectorMatch = inferredSectorNames.includes(normalizedSectorName);
+      const subTaskMatch = option.subTaskName
+        ? normalizeForKey(task.title).includes(normalizeForKey(option.subTaskName))
+        : false;
+
+      let score = 0;
+      if (!option.isPause) score += 1000;
+      if (containsCompletedAt) score += 5000;
+      if (sectorMatch) score += 10000;
+      if (subTaskMatch) score += 2000;
+
+      return { id: option.id, score, distance };
+    })
+    .sort((a, b) => b.score - a.score || a.distance - b.distance)[0]?.id ?? options[0].id;
+}
+
 export function SettingsPage() {
   const [sectors, setSectors] = useState<WorkSector[]>([]);
   const [subTasks, setSubTasks] = useState<SubTask[]>([]);
@@ -513,6 +944,12 @@ export function SettingsPage() {
   const [dataJournal, setDataJournal] = useState<DataJournalEntry[]>(() =>
     loadDataJournalEntries(),
   );
+  const [todoistImportLoading, setTodoistImportLoading] = useState(false);
+  const [todoistImportPreview, setTodoistImportPreview] = useState<TodoistImportPreview | null>(null);
+  const [todoistImportMessage, setTodoistImportMessage] = useState("");
+  const [todoistImportError, setTodoistImportError] = useState("");
+  const [todoistAddActionCounter, setTodoistAddActionCounter] = useState(false);
+  const [todoistGroupSimilarTasks, setTodoistGroupSimilarTasks] = useState(true);
 
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
@@ -1657,6 +2094,345 @@ export function SettingsPage() {
     }
   }
 
+  async function buildTodoistImportPreview(fileName: string, markdown: string): Promise<TodoistImportPreview> {
+    const rawTasks = parseTodoistReportMarkdown(fileName, markdown);
+
+    const [allEntries, allSectors, allSubTasks] = await Promise.all([
+      db.timeEntries.toArray(),
+      db.workSectors.toArray(),
+      db.subTasks.toArray(),
+    ]);
+
+    const sectorsById = new Map(allSectors.map((sector) => [sector.id, sector]));
+    const subTasksById = new Map(allSubTasks.map((subTask) => [subTask.id, subTask]));
+    const entriesByDate = new Map<string, typeof allEntries>();
+
+    for (const entry of allEntries) {
+      const existing = entriesByDate.get(entry.date) ?? [];
+      existing.push(entry);
+      entriesByDate.set(entry.date, existing);
+    }
+
+    const tasks: TodoistImportTask[] = rawTasks.map((task) => {
+      const sameDayEntries = (entriesByDate.get(task.date) ?? [])
+        .slice()
+        .sort((a, b) => a.startAt.localeCompare(b.startAt));
+
+      const targetOptions = sameDayEntries.map((entry) => ({
+        id: entry.id,
+        label: getTodoistTargetLabel(entry, sectorsById, subTasksById),
+      }));
+
+      const selectedTargetId = findBestTodoistTargetId(
+        task,
+        sameDayEntries.map((entry) => {
+          const sector = sectorsById.get(entry.sectorId);
+          const subTask = entry.subTaskId ? subTasksById.get(entry.subTaskId) : undefined;
+
+          return {
+            id: entry.id,
+            startAt: entry.startAt,
+            endAt: entry.endAt,
+            sectorName: entry.isPause ? "Pause" : sector?.name || "",
+            subTaskName: subTask?.name,
+            isPause: entry.isPause,
+          };
+        }),
+      );
+
+      const isDuplicate = sameDayEntries.some((entry) => notesContainTodoistTask(entry.notes, task));
+      const errors: string[] = [];
+
+      if (targetOptions.length === 0) {
+        errors.push("Aucune entrée de temps trouvée pour cette date.");
+      }
+
+      return {
+        ...task,
+        selected: !isDuplicate && errors.length === 0,
+        targetTimeEntryId: selectedTargetId,
+        targetOptions,
+        importProjectAsTag: shouldImportTodoistProjectAsTag(task.projectName),
+        suggestedTagName: task.projectName,
+        isDuplicate,
+        duplicateMode: "ignore",
+        errors,
+      };
+    });
+
+    return {
+      fileName,
+      tasks,
+      totalTasks: tasks.length,
+    };
+  }
+
+  function updateTodoistImportTask(importKey: string, updates: Partial<Pick<TodoistImportTask, "selected" | "targetTimeEntryId" | "importProjectAsTag" | "duplicateMode">>) {
+    setTodoistImportPreview((currentPreview) => {
+      if (!currentPreview) return currentPreview;
+
+      return {
+        ...currentPreview,
+        tasks: currentPreview.tasks.map((task) =>
+          task.importKey === importKey ? { ...task, ...updates } : task,
+        ),
+      };
+    });
+  }
+
+  function canImportTodoistTask(task: TodoistImportTask): boolean {
+    if (task.errors.length > 0) return false;
+    if (!task.targetTimeEntryId) return false;
+    if (task.isDuplicate && task.duplicateMode === "ignore") return false;
+    return true;
+  }
+
+  function setAllTodoistImportTasksSelected(selected: boolean) {
+    setTodoistImportPreview((currentPreview) => {
+      if (!currentPreview) return currentPreview;
+
+      return {
+        ...currentPreview,
+        tasks: currentPreview.tasks.map((task) => ({
+          ...task,
+          selected: selected ? canImportTodoistTask(task) : false,
+        })),
+      };
+    });
+  }
+
+  async function handleTodoistImportFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) return;
+
+    setTodoistImportLoading(true);
+    setTodoistImportMessage("");
+    setTodoistImportError("");
+    setTodoistImportPreview(null);
+
+    try {
+      const markdown = await file.text();
+      const preview = await buildTodoistImportPreview(file.name, markdown);
+      setTodoistImportPreview(preview);
+    } catch (error) {
+      console.error(error);
+      setTodoistImportError("Impossible de lire ce rapport Todoist.");
+    } finally {
+      setTodoistImportLoading(false);
+    }
+  }
+
+  async function handleConfirmTodoistImport() {
+    if (!todoistImportPreview) return;
+
+    const tasksToImport = todoistImportPreview.tasks.filter(
+      (task) => task.selected && canImportTodoistTask(task),
+    );
+
+    if (tasksToImport.length === 0) {
+      setTodoistImportError("Aucune tâche Todoist valide sélectionnée pour l’import.");
+      return;
+    }
+
+    setTodoistImportLoading(true);
+    setTodoistImportMessage("");
+    setTodoistImportError("");
+
+    try {
+      const now = new Date().toISOString();
+      const tasksByTargetEntry = new Map<string, TodoistImportTask[]>();
+
+      for (const task of tasksToImport) {
+        const existingTasks = tasksByTargetEntry.get(task.targetTimeEntryId) ?? [];
+        existingTasks.push(task);
+        tasksByTargetEntry.set(task.targetTimeEntryId, existingTasks);
+      }
+
+      let createdTagCount = 0;
+      let createdLinkCount = 0;
+      let createdActionCount = 0;
+
+      await db.transaction("rw", [db.timeEntries, db.workSectors, db.tags, db.timeEntryTags, db.entryActions], async () => {
+        const allTags = await db.tags.toArray();
+        const allEntries = await db.timeEntries.toArray();
+        const allSectors = await db.workSectors.toArray();
+        const tagsByName = new Map(allTags.map((tag) => [normalizeForKey(tag.name), tag]));
+        const sectorsById = new Map(allSectors.map((sector) => [sector.id, sector]));
+        const existingLinks = new Set(
+          (await db.timeEntryTags.toArray()).map((link) => `${link.timeEntryId}|${link.tagId}`),
+        );
+
+        for (const [timeEntryId, tasks] of tasksByTargetEntry.entries()) {
+          const entry = await db.timeEntries.get(timeEntryId);
+          if (!entry) continue;
+
+          const noteBuild = buildTodoistNoteLines(tasks, todoistGroupSimilarTasks);
+
+          const tasksToReplace = tasks.filter((task) => task.isDuplicate && task.duplicateMode === "replace");
+
+          if (tasksToReplace.length > 0) {
+            const replaceNoteBuild = buildTodoistNoteLines(tasksToReplace, todoistGroupSimilarTasks);
+            const datesToClean = Array.from(new Set(tasksToReplace.map((task) => task.date)));
+            for (const dateToClean of datesToClean) {
+              const entriesForDate = allEntries.filter((existingEntry) => existingEntry.date === dateToClean);
+              for (const entryForDate of entriesForDate) {
+                const cleanedNotes = removeTodoistLinesFromNotes(entryForDate.notes, replaceNoteBuild.removedExistingLines);
+                if (cleanedNotes === entryForDate.notes) continue;
+
+                await db.timeEntries.put({
+                  ...entryForDate,
+                  notes: cleanedNotes,
+                  updatedAt: now,
+                });
+
+                if (entryForDate.id === entry.id) {
+                  entry.notes = cleanedNotes;
+                }
+              }
+            }
+          }
+
+          const currentEntry = await db.timeEntries.get(timeEntryId);
+          if (!currentEntry) continue;
+
+          await db.timeEntries.put({
+            ...currentEntry,
+            notes: appendTodoistLinesToNotes(currentEntry.notes, noteBuild.lines, "add"),
+            updatedAt: now,
+          });
+
+          if (todoistAddActionCounter && noteBuild.actionQuantity > 0) {
+            const sector = sectorsById.get(currentEntry.sectorId);
+            const actionType = currentEntry.isPause ? "Pause" : sector?.name?.trim() || "Action";
+
+            await db.entryActions.put({
+              id: crypto.randomUUID(),
+              timeEntryId,
+              actionType,
+              quantity: noteBuild.actionQuantity,
+              createdAt: now,
+              updatedAt: now,
+            });
+            createdActionCount += 1;
+          }
+
+          for (const task of tasks) {
+            if (!task.importProjectAsTag || !task.suggestedTagName.trim()) continue;
+
+            const tagKey = normalizeForKey(task.suggestedTagName);
+            let tag = tagsByName.get(tagKey);
+
+            if (!tag) {
+              tag = {
+                id: crypto.randomUUID(),
+                name: task.suggestedTagName.trim(),
+                color: undefined,
+                description: undefined,
+                isActive: true,
+                isArchived: false,
+                createdAt: now,
+                updatedAt: now,
+              };
+
+              await db.tags.put(tag);
+              tagsByName.set(tagKey, tag);
+              createdTagCount += 1;
+            }
+
+            const linkKey = `${timeEntryId}|${tag.id}`;
+            if (existingLinks.has(linkKey)) continue;
+
+            await db.timeEntryTags.put({
+              id: crypto.randomUUID(),
+              timeEntryId,
+              tagId: tag.id,
+            });
+            existingLinks.add(linkKey);
+            createdLinkCount += 1;
+          }
+        }
+      });
+
+      setTodoistImportMessage(
+        `${tasksToImport.length} tâche${tasksToImport.length > 1 ? "s" : ""} Todoist importée${tasksToImport.length > 1 ? "s" : ""} dans les notes, une ligne par tâche. ${createdLinkCount} tag${createdLinkCount > 1 ? "s" : ""} lié${createdLinkCount > 1 ? "s" : ""}, dont ${createdTagCount} créé${createdTagCount > 1 ? "s" : ""}. ${createdActionCount} compteur${createdActionCount > 1 ? "s" : ""} d’action ajouté${createdActionCount > 1 ? "s" : ""}.`,
+      );
+      addDataJournalEntry({
+        type: "import_todoist",
+        title: "Import Todoist",
+        description: `${tasksToImport.length} tâche${tasksToImport.length > 1 ? "s" : ""} ajoutée${tasksToImport.length > 1 ? "s" : ""}`,
+        detail: todoistImportPreview.fileName,
+      });
+      setTodoistImportPreview(null);
+    } catch (error) {
+      console.error(error);
+      setTodoistImportError("L’import Todoist a échoué. Aucune donnée existante n’a été supprimée.");
+    } finally {
+      setTodoistImportLoading(false);
+    }
+  }
+
+
+  async function handleCleanupLegacyTodoistImport() {
+    const confirmed = window.confirm(
+      "Cette action va corriger les anciennes notes Todoist importées dans l’ancien format et supprimer les compteurs d’action Todoist. Les autres données ne seront pas supprimées. Continuer ?",
+    );
+
+    if (!confirmed) return;
+
+    setTodoistImportLoading(true);
+    setTodoistImportMessage("");
+    setTodoistImportError("");
+
+    try {
+      const now = new Date().toISOString();
+      let updatedEntriesCount = 0;
+      let deletedActionsCount = 0;
+
+      await db.transaction("rw", [db.timeEntries, db.entryActions], async () => {
+        const allEntries = await db.timeEntries.toArray();
+
+        for (const entry of allEntries) {
+          const sanitized = sanitizeLegacyTodoistNotes(entry.notes);
+          if (!sanitized.changed) continue;
+
+          await db.timeEntries.put({
+            ...entry,
+            notes: sanitized.notes,
+            updatedAt: now,
+          });
+          updatedEntriesCount += 1;
+        }
+
+        const todoistActions = (await db.entryActions.toArray()).filter(
+          (action) => normalizeForKey(action.actionType) === "todoist",
+        );
+
+        for (const action of todoistActions) {
+          await db.entryActions.delete(action.id);
+          deletedActionsCount += 1;
+        }
+      });
+
+      setTodoistImportMessage(
+        `Ancien import Todoist corrigé : ${updatedEntriesCount} entrée${updatedEntriesCount > 1 ? "s" : ""} nettoyée${updatedEntriesCount > 1 ? "s" : ""}, ${deletedActionsCount} action${deletedActionsCount > 1 ? "s" : ""} Todoist supprimée${deletedActionsCount > 1 ? "s" : ""}.`,
+      );
+      addDataJournalEntry({
+        type: "import_todoist",
+        title: "Correction import Todoist",
+        description: `${updatedEntriesCount} note${updatedEntriesCount > 1 ? "s" : ""} nettoyée${updatedEntriesCount > 1 ? "s" : ""}`,
+        detail: `${deletedActionsCount} action${deletedActionsCount > 1 ? "s" : ""} Todoist supprimée${deletedActionsCount > 1 ? "s" : ""}`,
+      });
+      await loadData();
+    } catch (error) {
+      console.error(error);
+      setTodoistImportError("Impossible de corriger l’ancien import Todoist.");
+    } finally {
+      setTodoistImportLoading(false);
+    }
+  }
+
   async function handleResetTrackingData() {
     setResetLoading(true);
 
@@ -2279,7 +3055,7 @@ export function SettingsPage() {
               </p>
             </div>
 
-            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="mt-5 grid gap-4 lg:grid-cols-3">
               <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
                 <h4 className="text-base font-semibold text-neutral-900">Importer un CSV</h4>
                 <p className="mt-2 text-sm text-neutral-600">
@@ -2317,6 +3093,36 @@ export function SettingsPage() {
                   />
                 </label>
               </div>
+
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-neutral-200">
+                <h4 className="text-base font-semibold text-neutral-900">Importer un rapport Todoist</h4>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Lis un rapport Markdown Todoist, puis rattache les tâches terminées aux entrées
+                  de temps existantes du même jour.
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <label className="inline-flex cursor-pointer rounded-full border border-neutral-300 bg-white px-5 py-3 text-sm font-medium text-neutral-700 hover:bg-neutral-50">
+                    {todoistImportLoading ? "Lecture en cours..." : "Choisir un rapport .md"}
+                    <input
+                      type="file"
+                      accept=".md,text/markdown,text/plain"
+                      className="hidden"
+                      disabled={todoistImportLoading}
+                      onChange={handleTodoistImportFileChange}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={handleCleanupLegacyTodoistImport}
+                    disabled={todoistImportLoading}
+                    className="rounded-full border border-amber-300 bg-amber-50 px-5 py-3 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    Corriger l’ancien import Todoist
+                  </button>
+                </div>
+              </div>
             </div>
 
           {importError ? (
@@ -2340,6 +3146,18 @@ export function SettingsPage() {
           {jsonImportMessage ? (
             <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-700 ring-1 ring-emerald-200">
               {jsonImportMessage}
+            </div>
+          ) : null}
+
+          {todoistImportError ? (
+            <div className="mt-4 rounded-2xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-200">
+              {todoistImportError}
+            </div>
+          ) : null}
+
+          {todoistImportMessage ? (
+            <div className="mt-4 rounded-2xl bg-emerald-50 p-4 text-sm text-emerald-700 ring-1 ring-emerald-200">
+              {todoistImportMessage}
             </div>
           ) : null}
 
@@ -2383,6 +3201,7 @@ export function SettingsPage() {
                   </button>
                 </div>
               </div>
+
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
@@ -2450,6 +3269,214 @@ export function SettingsPage() {
                   </div>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {todoistImportPreview ? (
+            <div className="mt-5 rounded-3xl bg-white p-4 ring-1 ring-neutral-200">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-neutral-900">Prévisualisation de l’import Todoist</h3>
+                  <p className="mt-1 text-sm text-neutral-600">Fichier : {todoistImportPreview.fileName}</p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAllTodoistImportTasksSelected(true)}
+                    disabled={todoistImportLoading}
+                    className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Tout sélectionner
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAllTodoistImportTasksSelected(false)}
+                    disabled={todoistImportLoading}
+                    className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Tout désélectionner
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTodoistImportPreview(null);
+                      setTodoistImportError("");
+                      setTodoistImportMessage("");
+                    }}
+                    disabled={todoistImportLoading}
+                    className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-50"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmTodoistImport}
+                    disabled={
+                      todoistImportLoading ||
+                      todoistImportPreview.tasks.filter(
+                        (task) => task.selected && canImportTodoistTask(task),
+                      ).length === 0
+                    }
+                    className="rounded-full bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                  >
+                    {todoistImportLoading ? "Import en cours..." : "Confirmer l’import Todoist"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <label className="flex items-start gap-3 rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-700 ring-1 ring-neutral-200">
+                  <input
+                    type="checkbox"
+                    checked={todoistAddActionCounter}
+                    onChange={(event) => setTodoistAddActionCounter(event.target.checked)}
+                    disabled={todoistImportLoading}
+                    className="mt-1 h-4 w-4 rounded border-neutral-300"
+                  />
+                  <span>
+                    <span className="block font-semibold text-neutral-800">Ajouter un compteur d’actions</span>
+                    <span className="mt-1 block text-xs text-neutral-500">Le compteur utilise le nom de l’entrée cible, par exemple Messages, Appels ou Suivis.</span>
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 rounded-2xl bg-neutral-50 p-4 text-sm text-neutral-700 ring-1 ring-neutral-200">
+                  <input
+                    type="checkbox"
+                    checked={todoistGroupSimilarTasks}
+                    onChange={(event) => setTodoistGroupSimilarTasks(event.target.checked)}
+                    disabled={todoistImportLoading}
+                    className="mt-1 h-4 w-4 rounded border-neutral-300"
+                  />
+                  <span>
+                    <span className="block font-semibold text-neutral-800">Regrouper les tâches similaires</span>
+                    <span className="mt-1 block text-xs text-neutral-500">Exemple : “Écrire à X pour sa fête” devient “Écrire à N personnes pour leur fête”.</span>
+                  </span>
+                </label>
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200">
+                  <p className="text-sm text-neutral-500">Tâches lues</p>
+                  <p className="mt-1 text-2xl font-bold text-neutral-900">{todoistImportPreview.totalTasks}</p>
+                </div>
+                <div className="rounded-2xl bg-emerald-50 p-4 text-center ring-1 ring-emerald-200">
+                  <p className="text-sm text-emerald-700">Sélectionnées</p>
+                  <p className="mt-1 text-2xl font-bold text-emerald-900">
+                    {todoistImportPreview.tasks.filter((task) => task.selected && canImportTodoistTask(task)).length}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-amber-50 p-4 text-center ring-1 ring-amber-200">
+                  <p className="text-sm text-amber-700">Déjà présentes</p>
+                  <p className="mt-1 text-2xl font-bold text-amber-900">
+                    {todoistImportPreview.tasks.filter((task) => task.isDuplicate).length}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-red-50 p-4 text-center ring-1 ring-red-200">
+                  <p className="text-sm text-red-700">Sans cible</p>
+                  <p className="mt-1 text-2xl font-bold text-red-900">
+                    {todoistImportPreview.tasks.filter((task) => task.errors.length > 0).length}
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 max-h-[520px] space-y-3 overflow-y-auto pr-1">
+                {todoistImportPreview.tasks.map((task) => (
+                  <div
+                    key={task.importKey}
+                    className={`rounded-2xl p-4 ring-1 ${
+                      task.errors.length > 0
+                        ? "bg-red-50 ring-red-200"
+                        : task.isDuplicate
+                          ? "bg-amber-50 ring-amber-200"
+                          : "bg-neutral-50 ring-neutral-200"
+                    }`}
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <label className="flex min-w-0 flex-1 items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={task.selected}
+                          disabled={task.errors.length > 0 || (task.isDuplicate && task.duplicateMode === "ignore")}
+                          onChange={(event) => updateTodoistImportTask(task.importKey, { selected: event.target.checked })}
+                          className="mt-1 h-4 w-4 rounded border-neutral-300"
+                        />
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold text-neutral-900">
+                            {task.completedTimeLabel} — {task.title}
+                          </span>
+                          <span className="mt-1 block text-xs text-neutral-600">
+                            {formatDateLabel(task.date)}{task.projectName ? ` · Projet : ${task.projectName}` : ""}
+                          </span>
+                          {task.isDuplicate ? (
+                            <span className="mt-1 block text-xs font-medium text-amber-700">Déjà présent dans les notes d’une entrée de cette journée.</span>
+                          ) : null}
+                          {todoistGroupSimilarTasks && getBirthdayMessageName(task.title) ? (
+                            <span className="mt-1 block text-xs font-medium text-emerald-700">Sera regroupée avec les autres tâches “Écrire à X pour sa fête” lors de l’import.</span>
+                          ) : null}
+                          {task.errors.length > 0 ? (
+                            <span className="mt-1 block text-xs font-medium text-red-700">{task.errors.join(" ")}</span>
+                          ) : null}
+                        </span>
+                      </label>
+
+                      <div className="w-full lg:w-[360px]">
+                        {task.isDuplicate ? (
+                          <div className="mb-3 rounded-2xl bg-white/80 p-3 ring-1 ring-amber-200">
+                            <label className="mb-1 block text-xs font-semibold text-amber-800">Action pour cette tâche déjà présente</label>
+                            <select
+                              value={task.duplicateMode}
+                              disabled={todoistImportLoading || task.errors.length > 0}
+                              onChange={(event) => {
+                                const duplicateMode = event.target.value as TodoistDuplicateMode;
+                                updateTodoistImportTask(task.importKey, {
+                                  duplicateMode,
+                                  selected: duplicateMode !== "ignore" && task.errors.length === 0 && task.targetOptions.length > 0,
+                                });
+                              }}
+                              className="w-full rounded-2xl border border-amber-300 bg-white px-3 py-2 text-xs text-neutral-900 outline-none disabled:opacity-50"
+                            >
+                              <option value="ignore">Ignorer cette tâche</option>
+                              <option value="add">Ajouter quand même</option>
+                              <option value="replace">Remplacer l’ancienne ligne correspondante</option>
+                            </select>
+                          </div>
+                        ) : null}
+
+                        <label className="mb-1 block text-xs font-medium text-neutral-600">Entrée cible</label>
+                        <select
+                          value={task.targetTimeEntryId}
+                          disabled={task.targetOptions.length === 0 || (task.isDuplicate && task.duplicateMode === "ignore")}
+                          onChange={(event) => updateTodoistImportTask(task.importKey, { targetTimeEntryId: event.target.value })}
+                          className="w-full rounded-2xl border border-neutral-300 bg-white px-3 py-2 text-xs text-neutral-900 outline-none disabled:bg-neutral-100 disabled:text-neutral-400"
+                        >
+                          {task.targetOptions.length === 0 ? (
+                            <option value="">Aucune entrée trouvée</option>
+                          ) : null}
+                          {task.targetOptions.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+
+                        {task.suggestedTagName ? (
+                          <label className="mt-2 flex items-center gap-2 text-xs text-neutral-600">
+                            <input
+                              type="checkbox"
+                              checked={task.importProjectAsTag}
+                              disabled={task.errors.length > 0 || (task.isDuplicate && task.duplicateMode === "ignore")}
+                              onChange={(event) => updateTodoistImportTask(task.importKey, { importProjectAsTag: event.target.checked })}
+                              className="h-4 w-4 rounded border-neutral-300"
+                            />
+                            <span>Ajouter le projet Todoist comme tag : {task.suggestedTagName}</span>
+                          </label>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : null}
 
