@@ -813,7 +813,9 @@ export function HistoryPage() {
                         ) : null}
 
                         {entry.notes ? (
-                          <p className="mt-3 text-sm text-neutral-700">{entry.notes}</p>
+                          <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-neutral-700">
+                            {entry.notes}
+                          </p>
                         ) : null}
 
                         {entry.tags && entry.tags.length > 0 ? (

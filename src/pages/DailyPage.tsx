@@ -615,10 +615,6 @@ export function DailyPage() {
       metaItems.push(`Sous-tâche : ${entry.subTask.name}`);
     }
 
-    if (entry.notes) {
-      metaItems.push(entry.notes);
-    }
-
     return (
       <div
         key={entry.id}
@@ -700,6 +696,12 @@ export function DailyPage() {
               </span>
             ))}
           </div>
+
+          {entry.notes ? (
+            <p className="whitespace-pre-line rounded-2xl bg-white px-3 py-2 text-sm leading-relaxed text-neutral-700 ring-1 ring-neutral-200">
+              {entry.notes}
+            </p>
+          ) : null}
         </div>
       </div>
     );
