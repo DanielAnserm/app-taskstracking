@@ -161,6 +161,88 @@ interface DataJournalEntry {
   createdAt: string;
 }
 
+type WeekStartsOn = 0 | 1;
+
+interface StatisticsCalculationSettings {
+  daysOff: number[];
+  excludedTagIds: string[];
+  nonWorkingDayThresholdMinutes: number;
+  weekStartsOn: WeekStartsOn;
+}
+
+const STATISTICS_SETTINGS_STORAGE_KEY = "time-tracking-statistics-settings";
+const LEGACY_STATISTICS_SETTINGS_STORAGE_KEY = "time-tracking-statistics-settings-v1";
+
+const DEFAULT_STATISTICS_SETTINGS: StatisticsCalculationSettings = {
+  daysOff: [5, 6],
+  excludedTagIds: [],
+  nonWorkingDayThresholdMinutes: 60,
+  weekStartsOn: 1,
+};
+
+const WEEKDAY_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 1, label: "Lundi" },
+  { value: 2, label: "Mardi" },
+  { value: 3, label: "Mercredi" },
+  { value: 4, label: "Jeudi" },
+  { value: 5, label: "Vendredi" },
+  { value: 6, label: "Samedi" },
+  { value: 0, label: "Dimanche" },
+];
+
+const WEEK_START_OPTIONS: Array<{ value: WeekStartsOn; label: string; description: string }> = [
+  { value: 1, label: "Lundi", description: "Semaine du lundi au dimanche" },
+  { value: 0, label: "Dimanche", description: "Semaine du dimanche au samedi" },
+];
+
+function loadStatisticsCalculationSettings(): StatisticsCalculationSettings {
+  try {
+    const rawSettings =
+      localStorage.getItem(STATISTICS_SETTINGS_STORAGE_KEY) ??
+      localStorage.getItem(LEGACY_STATISTICS_SETTINGS_STORAGE_KEY);
+
+    if (!rawSettings) return DEFAULT_STATISTICS_SETTINGS;
+
+    const parsedSettings = JSON.parse(rawSettings) as Partial<
+      StatisticsCalculationSettings & { excludedWeekDays?: number[] }
+    >;
+
+    const rawDaysOff = Array.isArray(parsedSettings.daysOff)
+      ? parsedSettings.daysOff
+      : parsedSettings.excludedWeekDays;
+
+    return {
+      daysOff: Array.isArray(rawDaysOff)
+        ? rawDaysOff.filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+        : DEFAULT_STATISTICS_SETTINGS.daysOff,
+      excludedTagIds: Array.isArray(parsedSettings.excludedTagIds)
+        ? parsedSettings.excludedTagIds.filter((tagId) => typeof tagId === "string")
+        : DEFAULT_STATISTICS_SETTINGS.excludedTagIds,
+      nonWorkingDayThresholdMinutes:
+        typeof parsedSettings.nonWorkingDayThresholdMinutes === "number" &&
+          Number.isFinite(parsedSettings.nonWorkingDayThresholdMinutes)
+          ? Math.max(0, Math.round(parsedSettings.nonWorkingDayThresholdMinutes))
+          : DEFAULT_STATISTICS_SETTINGS.nonWorkingDayThresholdMinutes,
+      weekStartsOn:
+        parsedSettings.weekStartsOn === 0 || parsedSettings.weekStartsOn === 1
+          ? parsedSettings.weekStartsOn
+          : DEFAULT_STATISTICS_SETTINGS.weekStartsOn,
+    };
+  } catch {
+    return DEFAULT_STATISTICS_SETTINGS;
+  }
+}
+
+function saveStatisticsCalculationSettings(settings: StatisticsCalculationSettings) {
+  const storedSettings = {
+    ...settings,
+    excludedWeekDays: settings.daysOff,
+  };
+
+  localStorage.setItem(STATISTICS_SETTINGS_STORAGE_KEY, JSON.stringify(storedSettings));
+  localStorage.setItem(LEGACY_STATISTICS_SETTINGS_STORAGE_KEY, JSON.stringify(storedSettings));
+}
+
 type CsvValue = string | number | boolean | null | undefined;
 
 function escapeCsvValue(value: CsvValue): string {
@@ -950,6 +1032,9 @@ export function SettingsPage() {
   const [todoistImportError, setTodoistImportError] = useState("");
   const [todoistAddActionCounter, setTodoistAddActionCounter] = useState(false);
   const [todoistGroupSimilarTasks, setTodoistGroupSimilarTasks] = useState(true);
+  const [statisticsSettings, setStatisticsSettings] = useState<StatisticsCalculationSettings>(() =>
+    loadStatisticsCalculationSettings(),
+  );
 
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
@@ -989,6 +1074,56 @@ export function SettingsPage() {
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => {
+    saveStatisticsCalculationSettings(statisticsSettings);
+  }, [statisticsSettings]);
+
+  function handleToggleStatisticsDayOff(dayValue: number) {
+    setStatisticsSettings((currentSettings) => {
+      const isAlreadySelected = currentSettings.daysOff.includes(dayValue);
+
+      return {
+        ...currentSettings,
+        daysOff: isAlreadySelected
+          ? currentSettings.daysOff.filter((day) => day !== dayValue)
+          : [...currentSettings.daysOff, dayValue].sort((a, b) => a - b),
+      };
+    });
+  }
+
+  function handleToggleStatisticsExcludedTag(tagId: string) {
+    setStatisticsSettings((currentSettings) => {
+      const isAlreadySelected = currentSettings.excludedTagIds.includes(tagId);
+
+      return {
+        ...currentSettings,
+        excludedTagIds: isAlreadySelected
+          ? currentSettings.excludedTagIds.filter((existingTagId) => existingTagId !== tagId)
+          : [...currentSettings.excludedTagIds, tagId],
+      };
+    });
+  }
+
+  function handleUpdateNonWorkingDayThreshold(value: string) {
+    const nextThreshold = Math.max(0, Math.round(Number(value) || 0));
+
+    setStatisticsSettings((currentSettings) => ({
+      ...currentSettings,
+      nonWorkingDayThresholdMinutes: nextThreshold,
+    }));
+  }
+
+  function handleUpdateWeekStartsOn(weekStartsOn: WeekStartsOn) {
+    setStatisticsSettings((currentSettings) => ({
+      ...currentSettings,
+      weekStartsOn,
+    }));
+  }
+
+  function handleResetStatisticsSettings() {
+    setStatisticsSettings(DEFAULT_STATISTICS_SETTINGS);
+  }
 
   function addDataJournalEntry(entry: Omit<DataJournalEntry, "id" | "createdAt">) {
     setDataJournal((currentEntries) => {
@@ -2880,6 +3015,149 @@ export function SettingsPage() {
                 >
                   Ajouter le tag
                 </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-neutral-900">Calcul des statistiques</h2>
+              <p className="mt-2 max-w-3xl text-sm text-neutral-600">
+                Définis les règles qui serviront plus tard aux moyennes et aux statistiques :
+                jours habituellement non travaillés, tags à exclure, et seuil minimum pour compter
+                un jour de congé comme vraiment travaillé.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleResetStatisticsSettings}
+              className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Réinitialiser
+            </button>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-4">
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Premier jour de la semaine</h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Ce réglage servira aux vues hebdomadaires, aux regroupements par semaine et aux
+                moyennes hebdomadaires.
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {WEEK_START_OPTIONS.map((option) => {
+                  const isSelected = statisticsSettings.weekStartsOn === option.value;
+
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => handleUpdateWeekStartsOn(option.value)}
+                      className={`rounded-full px-4 py-2 text-sm font-medium ring-1 ${isSelected
+                        ? "bg-neutral-900 text-white ring-neutral-900"
+                        : "bg-white text-neutral-700 ring-neutral-300 hover:bg-neutral-50"
+                        }`}
+                      title={option.description}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-white p-3 text-sm text-neutral-600 ring-1 ring-neutral-200">
+                Actuellement : {statisticsSettings.weekStartsOn === 1
+                  ? "semaine du lundi au dimanche"
+                  : "semaine du dimanche au samedi"}.
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Jours habituellement non travaillés</h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Un jour coché sera exclu des moyennes si aucune vraie journée de travail n’est détectée.
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {WEEKDAY_OPTIONS.map((day) => {
+                  const isSelected = statisticsSettings.daysOff.includes(day.value);
+
+                  return (
+                    <button
+                      key={day.value}
+                      type="button"
+                      onClick={() => handleToggleStatisticsDayOff(day.value)}
+                      className={`rounded-full px-4 py-2 text-sm font-medium ring-1 ${isSelected
+                        ? "bg-neutral-900 text-white ring-neutral-900"
+                        : "bg-white text-neutral-700 ring-neutral-300 hover:bg-neutral-50"
+                        }`}
+                    >
+                      {day.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Tags exclus des moyennes</h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Les entrées portant ces tags resteront visibles, mais pourront être exclues des moyennes
+                et des statistiques comptabilisées.
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {tags.length === 0 ? (
+                  <p className="text-sm text-neutral-500">Aucun tag disponible pour le moment.</p>
+                ) : (
+                  tags.map((tag) => {
+                    const isSelected = statisticsSettings.excludedTagIds.includes(tag.id);
+
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => handleToggleStatisticsExcludedTag(tag.id)}
+                        className={`rounded-full px-4 py-2 text-sm font-medium ring-1 ${isSelected
+                          ? "bg-neutral-900 text-white ring-neutral-900"
+                          : "bg-white text-neutral-700 ring-neutral-300 hover:bg-neutral-50"
+                          }`}
+                      >
+                        {tag.name}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+              <h3 className="text-base font-semibold text-neutral-900">Seuil pour compter un jour non travaillé</h3>
+              <p className="mt-2 text-sm text-neutral-600">
+                Si tu travailles exceptionnellement un jour de congé, il ne sera compté comme jour actif
+                statistique que si le temps comptabilisable atteint ce seuil.
+              </p>
+
+              <div className="mt-4">
+                <label className="mb-2 block text-sm font-medium text-neutral-700">
+                  Seuil en minutes
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={statisticsSettings.nonWorkingDayThresholdMinutes}
+                  onChange={(event) => handleUpdateNonWorkingDayThreshold(event.target.value)}
+                  className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                />
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-white p-3 text-sm text-neutral-600 ring-1 ring-neutral-200">
+                Exemple : avec un seuil de {statisticsSettings.nonWorkingDayThresholdMinutes} minutes,
+                une urgence de 10 minutes un jour de congé ne comptera pas comme vraie journée active.
               </div>
             </div>
           </div>

@@ -3,6 +3,8 @@ import PageHeaderNav from "../components/PageHeaderNav";
 import { db } from "../db/database";
 import type { EntryAction, SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
+import { loadStatisticsSettings } from "../utils/statisticsSettings";
+import { getCountableEntries } from "../utils/statisticsFilters";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
@@ -219,6 +221,7 @@ export function OverviewPage() {
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<RangeKey>("30d");
   const [viewMode, setViewMode] = useState<ViewMode>("trend");
+  const statisticsSettings = useMemo(() => loadStatisticsSettings(), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -267,14 +270,37 @@ export function OverviewPage() {
       .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime());
   }, [entries, range]);
 
-  const activeEntries = useMemo(
-    () => filteredEntries.filter((entry) => !entry.isPause),
-    [filteredEntries],
+  const tagLinksForFilteredEntries = useMemo(() => {
+    return filteredEntries.flatMap((entry) =>
+      (entry.tags ?? []).map((tag) => ({
+        timeEntryId: entry.id,
+        tagId: tag.id,
+      })),
+    );
+  }, [filteredEntries]);
+
+  const countableStats = useMemo(() => {
+    return getCountableEntries(
+      filteredEntries,
+      tagLinksForFilteredEntries,
+      statisticsSettings,
+    );
+  }, [filteredEntries, tagLinksForFilteredEntries, statisticsSettings]);
+
+  const activeEntries = countableStats.countableEntries as EntryWithSector[];
+  const countableEntryIds = useMemo(
+    () => new Set(activeEntries.map((entry) => entry.id)),
+    [activeEntries],
   );
+
   const pauseEntries = useMemo(
     () => filteredEntries.filter((entry) => entry.isPause),
     [filteredEntries],
   );
+
+  const registeredActiveSeconds = filteredEntries
+    .filter((entry) => !entry.isPause)
+    .reduce((sum, entry) => sum + entry.durationSeconds, 0);
 
   const totalActiveSeconds = activeEntries.reduce(
     (sum, entry) => sum + entry.durationSeconds,
@@ -284,8 +310,9 @@ export function OverviewPage() {
     (sum, entry) => sum + entry.durationSeconds,
     0,
   );
-  const totalSeconds = totalActiveSeconds + totalPauseSeconds;
-  const activeDays = new Set(filteredEntries.map((entry) => entry.date)).size;
+  const totalSeconds = registeredActiveSeconds + totalPauseSeconds;
+  const activeDays = countableStats.activeStatDates.length;
+  const excludedStatSeconds = Math.max(0, registeredActiveSeconds - totalActiveSeconds);
 
   const monthBuckets = useMemo<MonthBucket[]>(() => {
     const map = new Map<string, MonthBucket>();
@@ -293,31 +320,32 @@ export function OverviewPage() {
     for (const entry of filteredEntries) {
       const date = new Date(entry.startAt);
       const key = getMonthKey(date);
+      const isCountableActiveEntry = !entry.isPause && countableEntryIds.has(entry.id);
       const existing = map.get(key);
 
       if (existing) {
         if (entry.isPause) {
           existing.pauseSeconds += entry.durationSeconds;
-        } else {
+        } else if (isCountableActiveEntry) {
           existing.activeSeconds += entry.durationSeconds;
         }
         existing.entryCount += 1;
-        existing.activeDays.add(entry.date);
+        if (isCountableActiveEntry) existing.activeDays.add(entry.date);
       } else {
         map.set(key, {
           key,
           label: getMonthLabelFromKey(key),
           shortLabel: getMonthShortLabelFromKey(key),
-          activeSeconds: entry.isPause ? 0 : entry.durationSeconds,
+          activeSeconds: isCountableActiveEntry ? entry.durationSeconds : 0,
           pauseSeconds: entry.isPause ? entry.durationSeconds : 0,
           entryCount: 1,
-          activeDays: new Set([entry.date]),
+          activeDays: new Set(isCountableActiveEntry ? [entry.date] : []),
         });
       }
     }
 
     return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [filteredEntries]);
+  }, [filteredEntries, countableEntryIds]);
 
   const weekBuckets = useMemo<WeekBucket[]>(() => {
     const map = new Map<string, WeekBucket>();
@@ -325,12 +353,13 @@ export function OverviewPage() {
     for (const entry of filteredEntries) {
       const date = new Date(entry.startAt);
       const key = getWeekKey(date);
+      const isCountableActiveEntry = !entry.isPause && countableEntryIds.has(entry.id);
       const existing = map.get(key);
 
       if (existing) {
         if (entry.isPause) {
           existing.pauseSeconds += entry.durationSeconds;
-        } else {
+        } else if (isCountableActiveEntry) {
           existing.activeSeconds += entry.durationSeconds;
         }
         existing.entryCount += 1;
@@ -340,7 +369,7 @@ export function OverviewPage() {
           key,
           label: `Semaine ${getISOWeekNumber(weekStart)}`,
           rangeLabel: getWeekRangeLabel(weekStart),
-          activeSeconds: entry.isPause ? 0 : entry.durationSeconds,
+          activeSeconds: isCountableActiveEntry ? entry.durationSeconds : 0,
           pauseSeconds: entry.isPause ? entry.durationSeconds : 0,
           entryCount: 1,
         });
@@ -348,7 +377,7 @@ export function OverviewPage() {
     }
 
     return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [filteredEntries]);
+  }, [filteredEntries, countableEntryIds]);
 
   const weekdayBuckets = useMemo<WeekdayBucket[]>(() => {
     const buckets: WeekdayBucket[] = Array.from({ length: 7 }, (_, day) => ({
@@ -359,18 +388,14 @@ export function OverviewPage() {
       entryCount: 0,
     }));
 
-    for (const entry of filteredEntries) {
+    for (const entry of activeEntries) {
       const day = new Date(entry.startAt).getDay();
-      if (entry.isPause) {
-        buckets[day].pauseSeconds += entry.durationSeconds;
-      } else {
-        buckets[day].activeSeconds += entry.durationSeconds;
-      }
+      buckets[day].activeSeconds += entry.durationSeconds;
       buckets[day].entryCount += 1;
     }
 
     return buckets.sort((a, b) => b.activeSeconds - a.activeSeconds);
-  }, [filteredEntries]);
+  }, [activeEntries]);
 
   const sectorBuckets = useMemo<SectorBucket[]>(() => {
     const map = new Map<string, Omit<SectorBucket, "percentage">>();
@@ -480,28 +505,24 @@ export function OverviewPage() {
   const productiveDays = useMemo<ProductiveDay[]>(() => {
     const map = new Map<string, ProductiveDay>();
 
-    for (const entry of filteredEntries) {
+    for (const entry of activeEntries) {
       const existing = map.get(entry.date);
 
       if (existing) {
-        if (entry.isPause) {
-          existing.pauseSeconds += entry.durationSeconds;
-        } else {
-          existing.activeSeconds += entry.durationSeconds;
-        }
+        existing.activeSeconds += entry.durationSeconds;
         existing.entryCount += 1;
       } else {
         map.set(entry.date, {
           date: entry.date,
-          activeSeconds: entry.isPause ? 0 : entry.durationSeconds,
-          pauseSeconds: entry.isPause ? entry.durationSeconds : 0,
+          activeSeconds: entry.durationSeconds,
+          pauseSeconds: 0,
           entryCount: 1,
         });
       }
     }
 
     return Array.from(map.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
-  }, [filteredEntries]);
+  }, [activeEntries]);
 
   const hourBuckets = useMemo<HourBucket[]>(() => {
     const buckets: HourBucket[] = Array.from({ length: 24 }, (_, hour) => ({
@@ -511,17 +532,13 @@ export function OverviewPage() {
       pauseSeconds: 0,
     }));
 
-    for (const entry of filteredEntries) {
+    for (const entry of activeEntries) {
       const hour = new Date(entry.startAt).getHours();
-      if (entry.isPause) {
-        buckets[hour].pauseSeconds += entry.durationSeconds;
-      } else {
-        buckets[hour].activeSeconds += entry.durationSeconds;
-      }
+      buckets[hour].activeSeconds += entry.durationSeconds;
     }
 
     return buckets;
-  }, [filteredEntries]);
+  }, [activeEntries]);
 
   const topProductiveHours = useMemo(() => {
     return [...hourBuckets]
@@ -633,18 +650,19 @@ export function OverviewPage() {
     return result;
   }, [activeEntries]);
 
-  const workShare = totalSeconds > 0 ? Math.round((totalActiveSeconds / totalSeconds) * 100) : 0;
+  const workShare = totalSeconds > 0 ? Math.round((registeredActiveSeconds / totalSeconds) * 100) : 0;
   const pauseShare = totalSeconds > 0 ? 100 - workShare : 0;
 
   const averageDailySeconds = activeDays > 0 ? Math.floor(totalActiveSeconds / activeDays) : 0;
-  const averageWeeklySeconds =
-    weekBuckets.length > 0 ? Math.floor(totalActiveSeconds / weekBuckets.length) : 0;
-  const averageMonthlySeconds =
-    monthBuckets.length > 0 ? Math.floor(totalActiveSeconds / monthBuckets.length) : 0;
-
   const activeWeekBuckets = weekBuckets.filter((week) => week.activeSeconds > 0);
-  const bestWeek = [...weekBuckets].sort((a, b) => b.activeSeconds - a.activeSeconds)[0];
-  const bestMonth = [...monthBuckets].sort((a, b) => b.activeSeconds - a.activeSeconds)[0];
+  const activeMonthBuckets = monthBuckets.filter((month) => month.activeSeconds > 0);
+  const averageWeeklySeconds =
+    activeWeekBuckets.length > 0 ? Math.floor(totalActiveSeconds / activeWeekBuckets.length) : 0;
+  const averageMonthlySeconds =
+    activeMonthBuckets.length > 0 ? Math.floor(totalActiveSeconds / activeMonthBuckets.length) : 0;
+
+  const bestWeek = [...activeWeekBuckets].sort((a, b) => b.activeSeconds - a.activeSeconds)[0];
+  const bestMonth = [...activeMonthBuckets].sort((a, b) => b.activeSeconds - a.activeSeconds)[0];
   const lightestMonth = [...monthBuckets]
     .filter((month) => month.activeSeconds > 0)
     .sort((a, b) => a.activeSeconds - b.activeSeconds)[0];
@@ -693,15 +711,22 @@ export function OverviewPage() {
   });
 
   const keyMetrics = [
-    { title: "Temps total cumulé", value: safeDuration(totalActiveSeconds) },
+    {
+      title: "Temps comptabilisé",
+      value:
+        excludedStatSeconds > 0
+          ? `${safeDuration(totalActiveSeconds)} / ${safeDuration(registeredActiveSeconds)} enregistré`
+          : safeDuration(totalActiveSeconds),
+    },
     { title: "Moyenne mensuelle", value: safeDuration(averageMonthlySeconds) },
     { title: "Moyenne hebdomadaire", value: safeDuration(averageWeeklySeconds) },
-    { title: "Moyenne journalière", value: safeDuration(averageDailySeconds) },
-    { title: "Jours actifs", value: String(activeDays) },
+    { title: "Moyenne / jour actif", value: safeDuration(averageDailySeconds) },
+    { title: "Jours actifs statistiques", value: String(activeDays) },
     { title: "Répartition travail / pause", value: `${workShare}% / ${pauseShare}%` },
     {
       title: "Semaine record",
-      value: bestWeek ? `${bestWeek.label} — ${safeDuration(bestWeek.activeSeconds)}` : "—",
+      value: bestWeek ? `Semaine du ${bestWeek.rangeLabel}` : "—",
+      detail: bestWeek ? safeDuration(bestWeek.activeSeconds) : "",
     },
     {
       title: "Mois record",
@@ -715,7 +740,7 @@ export function OverviewPage() {
         <PageHeaderNav
           currentPage="global"
           title="Vue globale"
-          subtitle="Vue transversale pour suivre les tendances générales."
+          subtitle="Vue transversale pour suivre les tendances générales, hors pauses, tags exclus et petits dépannages."
           rightSlot={
             <div className="flex flex-col items-center gap-2">
               <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm ring-1 ring-neutral-300">
@@ -744,7 +769,10 @@ export function OverviewPage() {
                 className="rounded-2xl bg-neutral-50 p-4 text-center ring-1 ring-neutral-200"
               >
                 <p className="text-sm text-neutral-500">{metric.title}</p>
-                <p className="mt-1 text-xl font-bold text-neutral-900">{metric.value}</p>
+                <p className="mt-1 text-base font-semibold text-neutral-900">{metric.value}</p>
+                {"detail" in metric && metric.detail ? (
+                  <p className="mt-1 text-xl font-bold text-neutral-900">{metric.detail}</p>
+                ) : null}
               </div>
             ))}
           </div>

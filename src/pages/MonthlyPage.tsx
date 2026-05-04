@@ -3,6 +3,9 @@ import PageHeaderNav from "../components/PageHeaderNav";
 import { db } from "../db/database";
 import type { Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
+import { getCountableEntries, type EntryTagLinkLike } from "../utils/statisticsFilters";
+import { loadStatisticsSettings, type StatisticsSettings, type WeekStartsOn } from "../utils/statisticsSettings";
+import { getEndOfWeek as getConfiguredEndOfWeek, getStartOfWeek as getConfiguredStartOfWeek } from "../utils/weekUtils";
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
@@ -113,24 +116,16 @@ function getDaysInMonth(date: Date): Date[] {
   return days;
 }
 
-function getWeekStart(date: Date): Date {
-  const copy = new Date(date);
-  const day = copy.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  copy.setDate(copy.getDate() + diff);
-  copy.setHours(0, 0, 0, 0);
-  return copy;
+function getWeekStart(date: Date, weekStartsOn: WeekStartsOn): Date {
+  return getConfiguredStartOfWeek(date, weekStartsOn);
 }
 
-function getWeekEnd(weekStart: Date): Date {
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 6);
-  weekEnd.setHours(23, 59, 59, 999);
-  return weekEnd;
+function getWeekEnd(weekStart: Date, weekStartsOn: WeekStartsOn): Date {
+  return getConfiguredEndOfWeek(weekStart, weekStartsOn);
 }
 
-function getWeekLabel(weekStart: Date): string {
-  const weekEnd = getWeekEnd(weekStart);
+function getWeekLabel(weekStart: Date, weekStartsOn: WeekStartsOn): string {
+  const weekEnd = getWeekEnd(weekStart, weekStartsOn);
 
   return `${weekStart.toLocaleDateString("fr-CA", {
     day: "numeric",
@@ -141,8 +136,8 @@ function getWeekLabel(weekStart: Date): string {
   })}`;
 }
 
-function getWeekRangeLabel(weekStart: Date): string {
-  const weekEnd = getWeekEnd(weekStart);
+function getWeekRangeLabel(weekStart: Date, weekStartsOn: WeekStartsOn): string {
+  const weekEnd = getWeekEnd(weekStart, weekStartsOn);
   const sameMonth = weekStart.getMonth() === weekEnd.getMonth();
 
   if (sameMonth) {
@@ -215,15 +210,15 @@ function formatPercent(value: number): string {
   return `${Math.round(value * 10) / 10} %`;
 }
 
-function buildMonthWeekRanges(monthDate: Date): MonthWeekRange[] {
+function buildMonthWeekRanges(monthDate: Date, weekStartsOn: WeekStartsOn): MonthWeekRange[] {
   const monthStart = startOfMonth(monthDate);
   const monthEnd = endOfMonth(monthDate);
   const ranges: MonthWeekRange[] = [];
-  const cursor = getWeekStart(monthStart);
+  const cursor = getWeekStart(monthStart, weekStartsOn);
 
   while (cursor <= monthEnd) {
     const weekStart = new Date(cursor);
-    const weekEnd = getWeekEnd(weekStart);
+    const weekEnd = getWeekEnd(weekStart, weekStartsOn);
     const visibleStart = weekStart < monthStart ? monthStart : weekStart;
     const visibleEnd = weekEnd > monthEnd ? monthEnd : weekEnd;
     const startIndex = Math.floor((visibleStart.getTime() - monthStart.getTime()) / DAY_MS);
@@ -234,7 +229,7 @@ function buildMonthWeekRanges(monthDate: Date): MonthWeekRange[] {
       weekNumber: getIsoWeekNumber(weekStart),
       startDate: weekStart,
       endDate: weekEnd,
-      rangeLabel: getWeekRangeLabel(weekStart),
+      rangeLabel: getWeekRangeLabel(weekStart, weekStartsOn),
       startIndex,
       daysInMonth,
     });
@@ -250,6 +245,10 @@ export function MonthlyPage() {
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
   const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  const [tagLinks, setTagLinks] = useState<EntryTagLinkLike[]>([]);
+  const [statisticsSettings, setStatisticsSettings] = useState<StatisticsSettings>(() =>
+    loadStatisticsSettings(),
+  );
   const [loading, setLoading] = useState(true);
 
   const [pauseFilterMode, setPauseFilterMode] = useState<PauseFilterMode>("with_pauses");
@@ -266,6 +265,7 @@ export function MonthlyPage() {
       const rawEntries = await db.timeEntries.toArray();
       const allSectors = await db.workSectors.toArray();
       const allTags = await db.tags.toArray();
+      const allTagLinks = await db.timeEntryTags.toArray();
 
       const usableSectors = allSectors
         .filter((sector) => sector.isActive && !sector.isArchived)
@@ -294,6 +294,8 @@ export function MonthlyPage() {
         setEntries(enrichedEntries);
         setAvailableSectors(usableSectors);
         setAvailableTags(usableTags);
+        setTagLinks(allTagLinks);
+        setStatisticsSettings(loadStatisticsSettings());
         setLoading(false);
       }
     }
@@ -308,7 +310,11 @@ export function MonthlyPage() {
   const monthStart = useMemo(() => startOfMonth(monthDate), [monthDate]);
   const monthEnd = useMemo(() => endOfMonth(monthDate), [monthDate]);
   const monthLabel = useMemo(() => getMonthLabel(monthDate), [monthDate]);
-  const monthWeekRanges = useMemo(() => buildMonthWeekRanges(monthDate), [monthDate]);
+  const weekStartsOn = statisticsSettings.weekStartsOn;
+  const monthWeekRanges = useMemo(
+    () => buildMonthWeekRanges(monthDate, weekStartsOn),
+    [monthDate, weekStartsOn],
+  );
 
   const monthlyEntries = useMemo(() => {
     return entries
@@ -332,7 +338,16 @@ export function MonthlyPage() {
     });
   }, [monthlyEntries, pauseFilterMode, selectedFilterSectorId, selectedFilterTagName]);
 
-  const monthActiveSeconds = monthlyEntries
+  const monthlyTagLinks = useMemo(() => {
+    const monthlyEntryIds = new Set(monthlyEntries.map((entry) => entry.id));
+    return tagLinks.filter((link) => monthlyEntryIds.has(link.timeEntryId));
+  }, [monthlyEntries, tagLinks]);
+
+  const { countableEntries: monthlyCountableEntries, activeStatDates } = useMemo(() => {
+    return getCountableEntries(monthlyEntries, monthlyTagLinks, statisticsSettings);
+  }, [monthlyEntries, monthlyTagLinks, statisticsSettings]);
+
+  const monthRecordedActiveSeconds = monthlyEntries
     .filter((entry) => !entry.isPause)
     .reduce((sum, entry) => sum + entry.durationSeconds, 0);
 
@@ -340,9 +355,13 @@ export function MonthlyPage() {
     .filter((entry) => entry.isPause)
     .reduce((sum, entry) => sum + entry.durationSeconds, 0);
 
-  const monthTotalSeconds = monthActiveSeconds + monthPauseSeconds;
-  const activeDays = new Set(monthlyEntries.map((entry) => entry.date)).size;
-  const averagePerActiveDay = activeDays > 0 ? Math.floor(monthTotalSeconds / activeDays) : 0;
+  const monthRecordedTotalSeconds = monthRecordedActiveSeconds + monthPauseSeconds;
+  const monthCountableSeconds = monthlyCountableEntries.reduce(
+    (sum, entry) => sum + entry.durationSeconds,
+    0,
+  );
+  const activeDays = activeStatDates.length;
+  const averagePerActiveDay = activeDays > 0 ? Math.floor(monthCountableSeconds / activeDays) : 0;
 
   const weeklyBuckets = useMemo<WeekBucket[]>(() => {
     const map = new Map<string, WeekBucket>();
@@ -351,7 +370,7 @@ export function MonthlyPage() {
       map.set(weekRange.key, {
         key: weekRange.key,
         weekNumber: weekRange.weekNumber,
-        label: getWeekLabel(weekRange.startDate),
+        label: getWeekLabel(weekRange.startDate, weekStartsOn),
         rangeLabel: weekRange.rangeLabel,
         entries: [],
         activeSeconds: 0,
@@ -360,8 +379,8 @@ export function MonthlyPage() {
       });
     }
 
-    for (const entry of monthlyEntries) {
-      const weekStart = getWeekStart(new Date(entry.startAt));
+    for (const entry of monthlyCountableEntries) {
+      const weekStart = getWeekStart(new Date(entry.startAt), weekStartsOn);
 
       const key = toDateKey(weekStart);
       const bucket = map.get(key);
@@ -379,7 +398,7 @@ export function MonthlyPage() {
     }
 
     return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [monthWeekRanges, monthlyEntries]);
+  }, [monthWeekRanges, monthlyCountableEntries, weekStartsOn]);
 
   const filteredWeeklyBuckets = useMemo<WeekBucket[]>(() => {
     const map = new Map<string, WeekBucket>();
@@ -388,7 +407,7 @@ export function MonthlyPage() {
       map.set(weekRange.key, {
         key: weekRange.key,
         weekNumber: weekRange.weekNumber,
-        label: getWeekLabel(weekRange.startDate),
+        label: getWeekLabel(weekRange.startDate, weekStartsOn),
         rangeLabel: weekRange.rangeLabel,
         entries: [],
         activeSeconds: 0,
@@ -398,7 +417,7 @@ export function MonthlyPage() {
     }
 
     for (const entry of filteredMonthlyEntries) {
-      const weekStart = getWeekStart(new Date(entry.startAt));
+      const weekStart = getWeekStart(new Date(entry.startAt), weekStartsOn);
 
       const key = toDateKey(weekStart);
       const bucket = map.get(key);
@@ -416,15 +435,16 @@ export function MonthlyPage() {
     }
 
     return Array.from(map.values()).sort((a, b) => a.key.localeCompare(b.key));
-  }, [filteredMonthlyEntries, monthWeekRanges]);
+  }, [filteredMonthlyEntries, monthWeekRanges, weekStartsOn]);
 
+  const weeksWithCountableData = weeklyBuckets.filter((week) => week.totalSeconds > 0).length;
   const averagePerWeek =
-    weeklyBuckets.length > 0 ? Math.floor(monthTotalSeconds / weeklyBuckets.length) : 0;
+    weeksWithCountableData > 0 ? Math.floor(monthCountableSeconds / weeksWithCountableData) : 0;
 
   const topDays = useMemo(() => {
     const map = new Map<string, number>();
 
-    for (const entry of monthlyEntries) {
+    for (const entry of monthlyCountableEntries) {
       map.set(entry.date, (map.get(entry.date) ?? 0) + entry.durationSeconds);
     }
 
@@ -432,22 +452,28 @@ export function MonthlyPage() {
       .map(([date, seconds]) => ({ date, seconds }))
       .sort((a, b) => b.seconds - a.seconds)
       .slice(0, 3);
-  }, [monthlyEntries]);
+  }, [monthlyCountableEntries]);
 
   const mostLoadedWeek = useMemo(() => {
-    return weeklyBuckets.length > 0
-      ? [...weeklyBuckets].sort((a, b) => b.totalSeconds - a.totalSeconds)[0]
+    const weeksWithData = weeklyBuckets.filter((week) => week.totalSeconds > 0);
+
+    return weeksWithData.length > 0
+      ? [...weeksWithData].sort((a, b) => b.totalSeconds - a.totalSeconds)[0]
       : undefined;
   }, [weeklyBuckets]);
 
   const leastLoadedWeek = useMemo(() => {
-    return weeklyBuckets.length > 0
-      ? [...weeklyBuckets].filter((week) => week.totalSeconds > 0).sort((a, b) => a.totalSeconds - b.totalSeconds)[0]
+    const weeksWithData = weeklyBuckets.filter((week) => week.totalSeconds > 0);
+
+    return weeksWithData.length > 0
+      ? [...weeksWithData].sort((a, b) => a.totalSeconds - b.totalSeconds)[0]
       : undefined;
   }, [weeklyBuckets]);
 
-  const workRatio = monthTotalSeconds > 0 ? (monthActiveSeconds / monthTotalSeconds) * 100 : 0;
-  const pauseRatio = monthTotalSeconds > 0 ? (monthPauseSeconds / monthTotalSeconds) * 100 : 0;
+  const workRatio =
+    monthRecordedTotalSeconds > 0 ? (monthRecordedActiveSeconds / monthRecordedTotalSeconds) * 100 : 0;
+  const pauseRatio =
+    monthRecordedTotalSeconds > 0 ? (monthPauseSeconds / monthRecordedTotalSeconds) * 100 : 0;
 
   const taskSummary = useMemo<TaskSummary[]>(() => {
     const map = new Map<string, { name: string; seconds: number; color: string; isPause: boolean }>();
@@ -565,12 +591,12 @@ export function MonthlyPage() {
           title="Suivi mensuel"
           subtitle="Vue globale du mois avec statistiques, filtres, graphique et tableau."
           rightSlot={
-            <div className="grid justify-items-center gap-3">
-              <div className="grid grid-cols-[auto_minmax(180px,1fr)_auto] items-center gap-2">
+            <div className="flex flex-col items-center gap-2">
+              <div className="grid grid-cols-[auto_minmax(180px,auto)_auto] items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setMonthDate((prev) => addMonths(prev, -1))}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border border-neutral-300 bg-white text-lg font-medium text-neutral-700 hover:bg-neutral-50"
+                  className="rounded-full border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
                   aria-label="Mois précédent"
                 >
                   ←
@@ -583,7 +609,7 @@ export function MonthlyPage() {
                 <button
                   type="button"
                   onClick={() => setMonthDate((prev) => addMonths(prev, 1))}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border border-neutral-300 bg-white text-lg font-medium text-neutral-700 hover:bg-neutral-50"
+                  className="rounded-full border border-neutral-300 bg-white px-3 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
                   aria-label="Mois suivant"
                 >
                   →
@@ -593,7 +619,7 @@ export function MonthlyPage() {
               <button
                 type="button"
                 onClick={() => setMonthDate(startOfMonth(new Date()))}
-                className="rounded-full bg-neutral-900 px-5 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+                className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
               >
                 Mois actuel
               </button>
@@ -603,10 +629,15 @@ export function MonthlyPage() {
 
         <section className="grid gap-4 md:grid-cols-4">
           <div className="rounded-3xl bg-white p-5 text-center shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Temps total du mois</p>
+            <p className="text-sm font-medium text-neutral-500">Temps comptabilisé</p>
             <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-              {formatDurationFromSeconds(monthTotalSeconds)}
+              {formatDurationFromSeconds(monthCountableSeconds)}
             </p>
+            {monthRecordedTotalSeconds !== monthCountableSeconds ? (
+              <p className="mt-1 text-xs text-neutral-500">
+                {formatDurationFromSeconds(monthRecordedTotalSeconds)} enregistrés
+              </p>
+            ) : null}
           </div>
 
           <div className="rounded-3xl bg-white p-5 text-center shadow-sm ring-1 ring-black/5">
@@ -617,7 +648,7 @@ export function MonthlyPage() {
           </div>
 
           <div className="rounded-3xl bg-white p-5 text-center shadow-sm ring-1 ring-black/5">
-            <p className="text-sm font-medium text-neutral-500">Moyenne journalière</p>
+            <p className="text-sm font-medium text-neutral-500">Moyenne / jour actif</p>
             <p className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
               {formatDurationFromSeconds(averagePerActiveDay)}
             </p>
