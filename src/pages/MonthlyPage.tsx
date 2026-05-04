@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { db } from "../db/database";
 import type { Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
@@ -560,54 +560,46 @@ export function MonthlyPage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <Link
-                to="/"
-                className="text-sm font-medium text-neutral-500 hover:text-neutral-800"
-              >
-                Retour à l’accueil
-              </Link>
-              <h1 className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-                Suivi mensuel
-              </h1>
-              <p className="mt-1 text-sm text-neutral-600">
-                Vue globale du mois avec statistiques, filtres, graphique et tableau.
-              </p>
-            </div>
+        <PageHeaderNav
+          currentPage="mensuel"
+          title="Suivi mensuel"
+          subtitle="Vue globale du mois avec statistiques, filtres, graphique et tableau."
+          rightSlot={
+            <div className="grid justify-items-center gap-3">
+              <div className="grid grid-cols-[auto_minmax(180px,1fr)_auto] items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMonthDate((prev) => addMonths(prev, -1))}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-neutral-300 bg-white text-lg font-medium text-neutral-700 hover:bg-neutral-50"
+                  aria-label="Mois précédent"
+                >
+                  ←
+                </button>
 
-            <div className="grid grid-cols-1 justify-items-center gap-3 sm:grid-cols-[auto_auto_auto] lg:justify-items-end">
-              <div className="rounded-full bg-white px-4 py-2 text-sm font-semibold capitalize text-neutral-700 shadow-sm ring-1 ring-black/5 sm:col-start-2 sm:justify-self-center">
-                {monthLabel}
+                <div className="rounded-full bg-white px-4 py-2 text-center text-sm font-semibold capitalize text-neutral-700 shadow-sm ring-1 ring-black/5">
+                  {monthLabel}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setMonthDate((prev) => addMonths(prev, 1))}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border border-neutral-300 bg-white text-lg font-medium text-neutral-700 hover:bg-neutral-50"
+                  aria-label="Mois suivant"
+                >
+                  →
+                </button>
               </div>
 
               <button
                 type="button"
-                onClick={() => setMonthDate((prev) => addMonths(prev, -1))}
-                className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 sm:col-start-1 sm:row-start-2"
-              >
-                Mois précédent
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setMonthDate(startOfMonth(new Date()))}
-                className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 sm:col-start-2 sm:row-start-2"
+                className="rounded-full bg-neutral-900 px-5 py-2 text-sm font-medium text-white hover:bg-neutral-800"
               >
                 Mois actuel
               </button>
-
-              <button
-                type="button"
-                onClick={() => setMonthDate((prev) => addMonths(prev, 1))}
-                className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 sm:col-start-3 sm:row-start-2"
-              >
-                Mois suivant
-              </button>
             </div>
-          </div>
-        </header>
+          }
+        />
 
         <section className="grid gap-4 md:grid-cols-4">
           <div className="rounded-3xl bg-white p-5 text-center shadow-sm ring-1 ring-black/5">

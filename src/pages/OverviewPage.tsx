@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { db } from "../db/database";
 import type { EntryAction, SubTask, Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
@@ -712,37 +712,29 @@ export function OverviewPage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-4 md:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="space-y-3">
-          <Link to="/" className="text-sm font-medium text-neutral-500 hover:text-neutral-800">
-            Retour à l’accueil
-          </Link>
-
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-neutral-900">Vue globale</h1>
-              <p className="mt-1 text-sm text-neutral-600">
-                Vue transversale pour suivre les tendances générales, les volumes cumulés et les équilibres de travail dans le temps.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm">
+        <PageHeaderNav
+          currentPage="global"
+          title="Vue globale"
+          subtitle="Vue transversale pour suivre les tendances générales."
+          rightSlot={
+            <div className="flex flex-col items-center gap-2">
+              <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm ring-1 ring-neutral-300">
                 {getRangeLabel(range)}
-              </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setRange("all")}
                 className={`rounded-full px-4 py-2 text-sm font-medium shadow-sm ${
                   range === "all"
                     ? "bg-neutral-900 text-white"
-                    : "border border-neutral-300 bg-white text-neutral-700 hover:bg-neutral-50"
+                    : "bg-white text-neutral-700 ring-1 ring-neutral-300 hover:bg-neutral-50"
                 }`}
               >
                 Toutes les données
               </button>
             </div>
-          </div>
-        </header>
+          }
+        />
 
         <section className="space-y-4 rounded-[32px] bg-white p-5 shadow-sm ring-1 ring-black/5">
           <div className="grid gap-3 md:grid-cols-4 xl:grid-cols-4">

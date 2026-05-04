@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
 import { subTaskRepository } from "../repositories/subTaskRepository";
@@ -14,6 +14,7 @@ import {
   validateTimeRange,
   validateTypedSubTaskName,
 } from "../utils/validation";
+
 
 interface EntryWithSector extends TimeEntry {
   sector?: WorkSector;
@@ -49,29 +50,6 @@ function isoToTimeInput(iso: string): string {
 
 function isoToDateInput(iso: string): string {
   return iso.slice(0, 10);
-}
-
-function resolveEditedIso({
-  originalIso,
-  originalDate,
-  targetDate,
-  targetTime,
-}: {
-  originalIso: string;
-  originalDate: string;
-  targetDate: string;
-  targetTime: string;
-}): string {
-  const originalTime = isoToTimeInput(originalIso);
-  const originalIsoDate = isoToDateInput(originalIso);
-  const isSameVisibleTime = targetTime === originalTime;
-  const isSameVisibleDate = targetDate === originalDate || targetDate === originalIsoDate;
-
-  if (isSameVisibleDate && isSameVisibleTime) {
-    return originalIso;
-  }
-
-  return toIsoForDate(targetDate, targetTime);
 }
 
 function parseTagInput(input: string): string[] {
@@ -371,31 +349,8 @@ export function HistoryPage() {
       return;
     }
 
-    if (!editingEntryId) {
-      setErrorMessage("Sélectionne d’abord une entrée à modifier.");
-      return;
-    }
-
-    const existingEntry = entries.find((entry) => entry.id === editingEntryId);
-    if (!existingEntry) {
-      setErrorMessage("Entrée introuvable.");
-      return;
-    }
-
-    const startAt = resolveEditedIso({
-      originalIso: existingEntry.startAt,
-      originalDate: existingEntry.date,
-      targetDate: entryDate,
-      targetTime: startTime,
-    });
-
-    const endAt = resolveEditedIso({
-      originalIso: existingEntry.endAt,
-      originalDate: existingEntry.date,
-      targetDate: entryDate,
-      targetTime: endTime,
-    });
-
+    const startAt = toIsoForDate(entryDate, startTime);
+    const endAt = toIsoForDate(entryDate, endTime);
     const durationSeconds = diffSeconds(startAt, endAt);
 
     const timeRangeValidation = validateTimeRange(startAt, endAt);
@@ -419,8 +374,19 @@ export function HistoryPage() {
       return;
     }
 
+    if (!editingEntryId) {
+      setErrorMessage("Sélectionne d’abord une entrée à modifier.");
+      return;
+    }
+
     setSaving(true);
     try {
+      const existingEntry = entries.find((entry) => entry.id === editingEntryId);
+      if (!existingEntry) {
+        setErrorMessage("Entrée introuvable.");
+        return;
+      }
+
       const nowIso = new Date().toISOString();
 
       const updatedEntry: TimeEntry = {
@@ -448,20 +414,11 @@ export function HistoryPage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-5xl space-y-6">
-        <div>
-          <Link
-            to="/"
-            className="text-sm font-medium text-neutral-500 hover:text-neutral-800"
-          >
-            Retour à l’accueil
-          </Link>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-            Historique
-          </h1>
-          <p className="mt-1 text-sm text-neutral-600">
-            Vue simple de toutes les entrées enregistrées.
-          </p>
-        </div>
+        <PageHeaderNav
+          currentPage="historique"
+          title="Historique"
+          subtitle="Vue simple de toutes les entrées enregistrées."
+        />
 
         <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <div className="flex items-center justify-between gap-4">
@@ -813,9 +770,7 @@ export function HistoryPage() {
                         ) : null}
 
                         {entry.notes ? (
-                          <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-neutral-700">
-                            {entry.notes}
-                          </p>
+                          <p className="mt-3 text-sm text-neutral-700">{entry.notes}</p>
                         ) : null}
 
                         {entry.tags && entry.tags.length > 0 ? (

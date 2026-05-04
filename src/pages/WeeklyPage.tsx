@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
 import { db } from "../db/database";
 import type { Tag, TimeEntry, WorkSector } from "../types/domain";
@@ -559,58 +559,44 @@ export function WeeklyPage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <Link
-                to="/"
-                className="text-sm font-medium text-neutral-500 hover:text-neutral-800"
-              >
-                Retour à l’accueil
-              </Link>
-              <h1 className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-                Suivi hebdomadaire
-              </h1>
-              <p className="mt-1 text-sm text-neutral-600">
-                Vue synthétique de la semaine avec filtres, liste regroupée et calendrier.
-              </p>
-            </div>
-
-            <div className="flex flex-col items-center gap-3 lg:min-w-[320px]">
-              <div className="flex w-full justify-center">
-                <button
-                  type="button"
-                  onClick={() => setWeekStart(startOfWeek(new Date()))}
-                  className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-                >
-                  Semaine actuelle
-                </button>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-center gap-3">
+        <PageHeaderNav
+          currentPage="hebdo"
+          title="Suivi hebdomadaire"
+          subtitle="Vue synthétique de la semaine avec filtres, liste regroupée et calendrier."
+          rightSlot={
+            <div className="flex w-max min-w-[360px] flex-col items-center justify-center gap-3">
+              <div className="grid w-max grid-cols-[auto_minmax(220px,auto)_auto] items-center gap-2 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={() => setWeekStart((prev) => addDays(prev, -7))}
-                  className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  className="h-10 w-10 shrink-0 rounded-full border border-neutral-300 bg-white text-sm font-medium text-neutral-700 hover:bg-neutral-50"
                 >
                   ←
                 </button>
 
-                <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-600 shadow-sm ring-1 ring-black/5">
+                <div className="min-w-[220px] shrink-0 rounded-full bg-white px-4 py-2 text-center text-sm font-medium text-neutral-600 shadow-sm ring-1 ring-black/5">
                   {weekRangeLabel}
                 </div>
 
                 <button
                   type="button"
                   onClick={() => setWeekStart((prev) => addDays(prev, 7))}
-                  className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  className="h-10 w-10 shrink-0 rounded-full border border-neutral-300 bg-white text-sm font-medium text-neutral-700 hover:bg-neutral-50"
                 >
                   →
                 </button>
               </div>
+
+              <button
+                type="button"
+                onClick={() => setWeekStart(startOfWeek(new Date()))}
+                className="rounded-full bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
+              >
+                Semaine actuelle
+              </button>
             </div>
-          </div>
-        </header>
+          }
+        />
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">

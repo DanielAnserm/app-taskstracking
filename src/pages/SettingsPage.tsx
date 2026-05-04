@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { sectorRepository } from "../repositories/sectorRepository";
 import { subTaskRepository } from "../repositories/subTaskRepository";
 import { tagRepository } from "../repositories/tagRepository";
@@ -2524,20 +2524,11 @@ export function SettingsPage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-6xl space-y-6">
-        <div>
-          <Link
-            to="/"
-            className="text-sm font-medium text-neutral-500 hover:text-neutral-800"
-          >
-            Retour à l’accueil
-          </Link>
-          <h1 className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-            Paramètres
-          </h1>
-          <p className="mt-1 text-sm text-neutral-600">
-            Gestion simple des secteurs, des sous-tâches et des tags.
-          </p>
-        </div>
+        <PageHeaderNav
+          currentPage="parametres"
+          title="Paramètres"
+          subtitle="Gestion des tâches, sous-tâches, tags, exports, imports et sauvegardes."
+        />
 
         <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

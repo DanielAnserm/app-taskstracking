@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { Cell, Pie, PieChart, ResponsiveContainer } from "recharts";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { timeEntryRepository } from "../repositories/timeEntryRepository";
 import { sessionService } from "../domain/timeTracking/sessionService";
@@ -773,26 +773,20 @@ export function HomePage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="space-y-2">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold tracking-tight text-neutral-900">
-                Suivi du temps
-              </h1>
-              <p className="mt-1 text-sm text-neutral-600">
-                Écran principal de pilotage pour lancer, suivre et arrêter ton activité.
-              </p>
-            </div>
-
-            <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-600 shadow-sm ring-1 ring-black/5">
+        <PageHeaderNav
+          currentPage="accueil"
+          title="Suivi du temps"
+          subtitle="Écran principal de pilotage pour lancer, suivre et arrêter ton activité."
+          rightSlot={
+            <div className="rounded-full bg-neutral-50 px-4 py-2 text-sm font-medium text-neutral-700 ring-1 ring-neutral-200">
               {new Date().toLocaleDateString("fr-CA", {
                 weekday: "long",
                 day: "numeric",
                 month: "long",
               })}
             </div>
-          </div>
-        </header>
+          }
+        />
 
         <section className="rounded-[2rem] bg-white p-5 shadow-sm ring-1 ring-black/5 lg:p-6">
           <div className="flex flex-col gap-5">
@@ -1382,60 +1376,6 @@ export function HomePage() {
           </section>
         </section>
 
-        <section className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold text-neutral-900">Navigation</h2>
-              <p className="mt-1 text-sm text-neutral-600">
-                Accès rapide aux autres vues de la V1.
-              </p>
-            </div>
-          </div>
-
-          <nav className="mt-5 flex flex-wrap gap-3">
-            <Link
-              to="/jour"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Suivi du jour
-            </Link>
-
-            <Link
-              to="/hebdo"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Suivi hebdo
-            </Link>
-
-            <Link
-              to="/mensuel"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Suivi mensuel
-            </Link>
-
-            <Link
-              to="/global"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Vue globale
-            </Link>
-
-            <Link
-              to="/parametres"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Paramètres
-            </Link>
-
-            <Link
-              to="/historique"
-              className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-            >
-              Historique
-            </Link>
-          </nav>
-        </section>
 
         {isEditOpen ? (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">

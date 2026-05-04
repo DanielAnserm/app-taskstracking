@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import PageHeaderNav from "../components/PageHeaderNav";
 import { aggregationService } from "../domain/timeTracking/aggregationService";
 import { entryService } from "../domain/timeTracking/entryService";
 import { db } from "../db/database";
@@ -16,6 +16,8 @@ import {
   validateTimeRange,
   validateTypedSubTaskName,
 } from "../utils/validation";
+
+
 
 function todayDateString(): string {
   return new Date().toISOString().slice(0, 10);
@@ -710,34 +712,22 @@ export function DailyPage() {
   return (
     <main className="min-h-screen bg-neutral-100 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <Link
-                to="/"
-                className="text-sm font-medium text-neutral-500 hover:text-neutral-800"
-              >
-                Retour à l’accueil
-              </Link>
-              <h1 className="mt-2 text-3xl font-bold tracking-tight text-neutral-900">
-                Suivi du jour
-              </h1>
-              <p className="mt-1 text-sm text-neutral-600">
-                Ajoute, consulte et ajuste les entrées de la date sélectionnée.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="flex items-center gap-3">
+        <PageHeaderNav
+          currentPage="jour"
+          title="Suivi du jour"
+          subtitle="Ajoute, consulte et ajuste les entrées de la date sélectionnée."
+          rightSlot={
+            <div className="flex flex-col items-center gap-2">
+              <div className="grid grid-cols-[auto_auto_auto] items-center gap-2 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={() => setSelectedDate((prev) => shiftDateString(prev, -1))}
-                  className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  className="rounded-full border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
                 >
                   ←
                 </button>
 
-                <div className="rounded-full bg-white px-4 py-2 text-sm font-medium text-neutral-600 shadow-sm ring-1 ring-black/5">
+                <div className="rounded-full bg-white px-4 py-1.5 text-sm font-medium text-neutral-700 ring-1 ring-neutral-200">
                   {formattedSelectedDate}
                 </div>
 
@@ -745,7 +735,7 @@ export function DailyPage() {
                   type="button"
                   onClick={() => setSelectedDate((prev) => shiftDateString(prev, 1))}
                   disabled={isTodaySelected}
-                  className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
+                  className="rounded-full border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 disabled:opacity-40"
                 >
                   →
                 </button>
@@ -754,13 +744,13 @@ export function DailyPage() {
               <button
                 type="button"
                 onClick={openCreateModal}
-                className="rounded-full bg-neutral-900 px-5 py-3 text-sm font-medium text-white"
+                className="rounded-full bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white"
               >
                 Ajouter une entrée
               </button>
             </div>
-          </div>
-        </header>
+          }
+        />
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/5">
