@@ -1,5 +1,11 @@
 import { type ChangeEvent, useEffect, useState } from "react";
 import PageHeaderNav from "../components/PageHeaderNav";
+import {
+  DEFAULT_DISPLAY_SETTINGS,
+  loadDisplaySettings,
+  saveDisplaySettings,
+  type DisplaySettings,
+} from "../utils/displaySettings";
 import { sectorRepository } from "../repositories/sectorRepository";
 import { subTaskRepository } from "../repositories/subTaskRepository";
 import { tagRepository } from "../repositories/tagRepository";
@@ -194,6 +200,8 @@ const WEEK_START_OPTIONS: Array<{ value: WeekStartsOn; label: string; descriptio
   { value: 1, label: "Lundi", description: "Semaine du lundi au dimanche" },
   { value: 0, label: "Dimanche", description: "Semaine du dimanche au samedi" },
 ];
+
+const SHORT_CALENDAR_TASK_THRESHOLD_PRESETS = [5, 10, 12, 15, 20];
 
 function loadStatisticsCalculationSettings(): StatisticsCalculationSettings {
   try {
@@ -1036,6 +1044,10 @@ export function SettingsPage() {
     loadStatisticsCalculationSettings(),
   );
 
+  const [displaySettings, setDisplaySettings] = useState<DisplaySettings>(() =>
+    loadDisplaySettings(),
+  );
+
   const [draftSector, setDraftSector] = useState<DraftSector>({
     name: "",
     color: "#3b82f6",
@@ -1079,6 +1091,10 @@ export function SettingsPage() {
     saveStatisticsCalculationSettings(statisticsSettings);
   }, [statisticsSettings]);
 
+  useEffect(() => {
+    saveDisplaySettings(displaySettings);
+  }, [displaySettings]);
+
   function handleToggleStatisticsDayOff(dayValue: number) {
     setStatisticsSettings((currentSettings) => {
       const isAlreadySelected = currentSettings.daysOff.includes(dayValue);
@@ -1119,6 +1135,19 @@ export function SettingsPage() {
       ...currentSettings,
       weekStartsOn,
     }));
+  }
+
+  function handleUpdateShortCalendarTaskThreshold(value: string) {
+    const nextThreshold = Math.max(1, Math.round(Number(value) || 1));
+
+    setDisplaySettings((currentSettings) => ({
+      ...currentSettings,
+      shortCalendarTaskThresholdMinutes: nextThreshold,
+    }));
+  }
+
+  function handleResetDisplaySettings() {
+    setDisplaySettings(DEFAULT_DISPLAY_SETTINGS);
   }
 
   function handleResetStatisticsSettings() {
@@ -3159,6 +3188,82 @@ export function SettingsPage() {
                 Exemple : avec un seuil de {statisticsSettings.nonWorkingDayThresholdMinutes} minutes,
                 une urgence de 10 minutes un jour de congé ne comptera pas comme vraie journée active.
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-5 rounded-3xl bg-white p-6 shadow-sm ring-1 ring-black/5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-neutral-900">Affichage</h2>
+              <p className="mt-2 max-w-3xl text-sm text-neutral-600">
+                Ajuste les préférences visuelles de l’application. Ces réglages ne modifient pas
+                les données enregistrées.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleResetDisplaySettings}
+              className="rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+            >
+              Réinitialiser
+            </button>
+          </div>
+
+          <div className="rounded-3xl bg-neutral-50 p-4 ring-1 ring-neutral-200">
+            <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+              <div>
+                <h3 className="text-base font-semibold text-neutral-900">Calendrier hebdomadaire</h3>
+                <p className="mt-2 text-sm text-neutral-600">
+                  Les tâches plus courtes que ce seuil sont regroupées dans une ligne compacte
+                  dans la vue calendrier hebdomadaire.
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {SHORT_CALENDAR_TASK_THRESHOLD_PRESETS.map((preset) => {
+                    const isSelected =
+                      displaySettings.shortCalendarTaskThresholdMinutes === preset;
+
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => handleUpdateShortCalendarTaskThreshold(String(preset))}
+                        className={`rounded-full px-4 py-2 text-sm font-medium ring-1 ${isSelected
+                          ? "bg-neutral-900 text-white ring-neutral-900"
+                          : "bg-white text-neutral-700 ring-neutral-300 hover:bg-neutral-50"
+                          }`}
+                      >
+                        {preset} min
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="min-w-[220px]">
+                <label className="mb-2 block text-sm font-medium text-neutral-700">
+                  Regrouper si durée inférieure à
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    value={displaySettings.shortCalendarTaskThresholdMinutes}
+                    onChange={(event) =>
+                      handleUpdateShortCalendarTaskThreshold(event.target.value)
+                    }
+                    className="w-full rounded-2xl border border-neutral-300 bg-white px-4 py-3 text-sm text-neutral-900 outline-none"
+                  />
+                  <span className="text-sm font-medium text-neutral-600">min</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl bg-white p-3 text-sm text-neutral-600 ring-1 ring-neutral-200">
+              Actuellement : les tâches de moins de {displaySettings.shortCalendarTaskThresholdMinutes} minutes
+              seront regroupées dans le calendrier hebdomadaire.
             </div>
           </div>
         </section>
