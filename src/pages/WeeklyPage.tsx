@@ -5,7 +5,7 @@ import { db } from "../db/database";
 import type { Tag, TimeEntry, WorkSector } from "../types/domain";
 import { formatDurationFromSeconds } from "../utils/duration";
 import { getCountableEntries, type EntryTagLinkLike } from "../utils/statisticsFilters";
-import { loadStatisticsSettings } from "../utils/statisticsSettings";
+import { loadStatisticsSettings, type WeekStartsOn } from "../utils/statisticsSettings";
 import { loadDisplaySettings } from "../utils/displaySettings";
 
 interface EntryWithSector extends TimeEntry {
@@ -72,12 +72,15 @@ const CALENDAR_END_HOUR = 22;
 const CALENDAR_TOTAL_MINUTES = (CALENDAR_END_HOUR - CALENDAR_START_HOUR) * 60;
 const SHORT_CALENDAR_CLUSTER_MAX_GAP_MINUTES = 1;
 
-function startOfWeek(date: Date): Date {
+function startOfWeek(date: Date, weekStartsOn: WeekStartsOn): Date {
   const copy = new Date(date);
-  const day = copy.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  copy.setDate(copy.getDate() + diff);
   copy.setHours(0, 0, 0, 0);
+
+  const currentDay = copy.getDay();
+  const diff = (currentDay - weekStartsOn + 7) % 7;
+
+  copy.setDate(copy.getDate() - diff);
+
   return copy;
 }
 
@@ -311,7 +314,10 @@ function groupShortCalendarBlocks(
 }
 
 export function WeeklyPage() {
-  const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
+  const [weekStart, setWeekStart] = useState(() => {
+    const initialSettings = loadStatisticsSettings();
+    return startOfWeek(new Date(), initialSettings.weekStartsOn);
+  });
   const [entries, setEntries] = useState<EntryWithSector[]>([]);
   const [availableSectors, setAvailableSectors] = useState<WorkSector[]>([]);
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
@@ -625,7 +631,7 @@ export function WeeklyPage() {
 
               <button
                 type="button"
-                onClick={() => setWeekStart(startOfWeek(new Date()))}
+                onClick={() => setWeekStart(startOfWeek(new Date(), statisticsSettings.weekStartsOn))}
                 className="rounded-full bg-neutral-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-neutral-800"
               >
                 Semaine actuelle
